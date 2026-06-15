@@ -17,16 +17,56 @@ func main() {
 	}
 }
 
+func printHelp() {
+	fmt.Print(`vigil — keep your system awake
+
+USAGE
+  vigil <command> [flags]
+
+COMMANDS
+  start   Start the sleep inhibitor
+  help    Show this help message
+
+Run 'vigil <command> -h' for command-specific help.
+
+EXAMPLES
+  vigil start               Keep awake indefinitely (Ctrl+C to stop)
+  vigil start -t 2h         Keep awake for 2 hours, then exit
+  vigil start -t 45m -s     Keep awake for 45 minutes, then shut down
+
+`)
+}
+
 func run(args []string) error {
-	fs := flag.NewFlagSet("vigil", flag.ContinueOnError)
+	if len(args) == 0 {
+		printHelp()
+		return nil
+	}
+
+	switch args[0] {
+	case "start":
+		return cmdStart(args[1:])
+	case "help", "-h", "--help":
+		printHelp()
+		return nil
+	default:
+		fmt.Fprintf(os.Stderr, "vigil: unknown command %q\n\n", args[0])
+		printHelp()
+		os.Exit(1)
+	}
+	return nil
+}
+
+func cmdStart(args []string) error {
+	fs := flag.NewFlagSet("vigil start", flag.ContinueOnError)
 	timeoutFlag := fs.String("t", "", "Duration to stay awake (e.g. 2h, 45m, 30s, 1h30m)")
 	shutdownFlag := fs.Bool("s", false, "Shut down the system when the timeout expires")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, `vigil — keep your system awake
+		fmt.Fprint(os.Stderr, `vigil start — start the sleep inhibitor
 
 USAGE
-  vigil [flags]
+  vigil start [flags]
 
 FLAGS
   -t <duration>   Stay awake for the given duration, then exit.
@@ -39,10 +79,10 @@ FLAGS
   -h              Show this help message.
 
 EXAMPLES
-  vigil                     Keep awake indefinitely (Ctrl+C to stop)
-  vigil -t 2h               Keep awake for 2 hours, then exit
-  vigil -t 1h30m            Keep awake for 1 hour 30 minutes
-  vigil -t 45m -s           Keep awake for 45 minutes, then shut down
+  vigil start               Keep awake indefinitely (Ctrl+C to stop)
+  vigil start -t 2h         Keep awake for 2 hours, then exit
+  vigil start -t 1h30m      Keep awake for 1 hour 30 minutes
+  vigil start -t 45m -s     Keep awake for 45 minutes, then shut down
 
 `)
 	}
