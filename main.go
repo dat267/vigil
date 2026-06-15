@@ -19,10 +19,38 @@ func main() {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("vigil", flag.ContinueOnError)
-	timeoutFlag := fs.String("t", "", "Exit after specified duration (e.g. 2h, 45m, 15s)")
-	shutdownFlag := fs.Bool("s", false, "Shutdown the system after the timeout expires")
+	timeoutFlag := fs.String("t", "", "Duration to stay awake (e.g. 2h, 45m, 30s, 1h30m)")
+	shutdownFlag := fs.Bool("s", false, "Shut down the system when the timeout expires")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `vigil — keep your system awake
+
+USAGE
+  vigil [flags]
+
+FLAGS
+  -t <duration>   Stay awake for the given duration, then exit.
+                  Accepts Go duration strings: e.g. 30s, 45m, 2h, 1h30m.
+                  Omit to run indefinitely.
+
+  -s              Shut down the system after the timeout (-t) expires.
+                  Requires -t; cannot be used alone.
+
+  -h              Show this help message.
+
+EXAMPLES
+  vigil                     Keep awake indefinitely (Ctrl+C to stop)
+  vigil -t 2h               Keep awake for 2 hours, then exit
+  vigil -t 1h30m            Keep awake for 1 hour 30 minutes
+  vigil -t 45m -s           Keep awake for 45 minutes, then shut down
+
+`)
+	}
 
 	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return nil
+		}
 		return err
 	}
 
