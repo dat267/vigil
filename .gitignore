@@ -1,0 +1,7 @@
+# Build output
+/adl
+/adl.exe
+/dist/
+
+# Temp download dirs
+.downloading/

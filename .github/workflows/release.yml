@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # Derived from the repo name (e.g. "dat267/adl" → "adl").
+  # Override via a BIN_NAME repository variable if they differ.
+  BIN_NAME:       ${{ vars.BIN_NAME || github.event.repository.name }}
+  KEEP_RELEASES:  ${{ vars.KEEP_RELEASES || '3' }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos:   [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        include:
+          - { goos: linux, goarch: arm }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS:        ${{ matrix.goos }}
+          GOARCH:      ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          SUFFIX=""
+          [ "${{ matrix.goos }}" = "windows" ] && SUFFIX=".exe"
+          OUT="${{ env.BIN_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}${SUFFIX}"
+          go build \
+            -ldflags "-s -w -X main.version=${{ env.BIN_NAME }}/${{ github.sha }}" \
+            -o "$OUT" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ env.BIN_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Compute release tag
+        id: meta
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "tag=${{ env.BIN_NAME }}/${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "name=Release ${{ env.BIN_NAME }}/${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name:               ${{ steps.meta.outputs.tag }}
+          name:                   ${{ steps.meta.outputs.name }}
+          target_commitish:       ${{ github.sha }}
+          generate_release_notes: true
+          files: "*"
+
+      - name: Clean up old releases (keep ${{ env.KEEP_RELEASES }} most recent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO:  ${{ github.repository }}
+        run: |
+          PREFIX="${{ env.BIN_NAME }}/"
+          releases=$(gh release list --limit 100 --json tagName \
+            | jq -r '.[].tagName' | grep "^${PREFIX}")
+
+          count=0
+          for tag in $releases; do
+            count=$((count + 1))
+            if [ "$count" -gt "${{ env.KEEP_RELEASES }}" ]; then
+              echo "Deleting: $tag"
+              gh release delete "$tag" --yes --cleanup-tag || true
+            else
+              echo "Keeping:  $tag"
+            fi
+          done
