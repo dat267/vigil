@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  # Derived from the repo name (e.g. "dat267/adl" → "adl").
+  # Derived from the repo name (e.g. "dat267/vigil" → "vigil").
   # Override via a BIN_NAME repository variable if they differ.
   BIN_NAME:       ${{ vars.BIN_NAME || github.event.repository.name }}
   KEEP_RELEASES:  ${{ vars.KEEP_RELEASES || '3' }}
