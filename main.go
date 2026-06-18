@@ -229,5 +229,9 @@ func triggerShutdownCountdown(ctx context.Context) error {
 	} else {
 		cmd = exec.Command("shutdown", "-h", "now")
 	}
-	return cmd.Run()
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to execute system shutdown (ensure you have administrative/sudo privileges): %w", err)
+	}
+	return nil
 }
