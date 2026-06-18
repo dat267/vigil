@@ -35,6 +35,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Run tests & verify code lint
+        run: |
+          go test -v ./...
+          go vet ./...
+
       - name: Build
         env:
           GOOS:        ${{ matrix.goos }}

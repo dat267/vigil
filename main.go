@@ -55,6 +55,8 @@ func isTerminal(f *os.File) bool {
 	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
+var startInhibitFn = startInhibit
+
 func run(args []string) error {
 	if len(args) == 0 {
 		printHelp()
@@ -71,11 +73,9 @@ func run(args []string) error {
 		printHelp()
 		return nil
 	default:
-		fmt.Fprintf(os.Stderr, "vigil: unknown command %q\n\n", args[0])
 		printHelp()
-		os.Exit(1)
+		return fmt.Errorf("unknown command %q", args[0])
 	}
-	return nil
 }
 
 func cmdStart(args []string) error {
@@ -131,7 +131,7 @@ EXAMPLES
 		}
 	}
 
-	stopInhibit, err := startInhibit()
+	stopInhibit, err := startInhibitFn()
 	if err != nil {
 		return fmt.Errorf("failed to initialize sleep inhibitor: %w", err)
 	}
