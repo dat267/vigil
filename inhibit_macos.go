@@ -16,6 +16,7 @@ func startInhibit() (func(), error) {
 	cleanup := func() {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
 		}
 	}
 

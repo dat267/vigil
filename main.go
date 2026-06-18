@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"time"
 )
+
+var version = "dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -24,8 +29,9 @@ USAGE
   vigil <command> [flags]
 
 COMMANDS
-  start   Start the sleep inhibitor
-  help    Show this help message
+  start     Start the sleep inhibitor
+  version   Show version information
+  help      Show this help message
 
 Run 'vigil <command> -h' for command-specific help.
 
@@ -37,6 +43,18 @@ EXAMPLES
 `)
 }
 
+func printVersion() {
+	fmt.Printf("vigil %s\n", version)
+}
+
+func isTerminal(f *os.File) bool {
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
 func run(args []string) error {
 	if len(args) == 0 {
 		printHelp()
@@ -46,6 +64,9 @@ func run(args []string) error {
 	switch args[0] {
 	case "start":
 		return cmdStart(args[1:])
+	case "version", "-v", "--version":
+		printVersion()
+		return nil
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
@@ -98,22 +119,32 @@ EXAMPLES
 		return errors.New("cannot use -s (shutdown) without specifying a timeout duration via -t")
 	}
 
+	var dur time.Duration
+	if *timeoutFlag != "" {
+		var err error
+		dur, err = time.ParseDuration(*timeoutFlag)
+		if err != nil {
+			return fmt.Errorf("invalid timeout %q: %w", *timeoutFlag, err)
+		}
+		if dur <= 0 {
+			return errors.New("timeout duration must be positive")
+		}
+	}
+
 	stopInhibit, err := startInhibit()
 	if err != nil {
 		return fmt.Errorf("failed to initialize sleep inhibitor: %w", err)
 	}
 	defer stopInhibit()
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	startTime := time.Now()
 	var timeoutChan <-chan time.Time
 
-	if *timeoutFlag != "" {
-		dur, err := time.ParseDuration(*timeoutFlag)
-		if err != nil {
-			return fmt.Errorf("invalid timeout %q", *timeoutFlag)
-		}
+	if dur > 0 {
 		timeoutChan = time.After(dur)
-
 		stopTime := startTime.Add(dur).Format(time.DateTime)
 		if *shutdownFlag {
 			fmt.Printf("Vigil active until %s (with system shutdown).\nPress Ctrl+C to stop.\n", stopTime)
@@ -124,18 +155,34 @@ EXAMPLES
 		fmt.Println("Vigil active indefinitely.\nPress Ctrl+C to stop.")
 	}
 
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+	useTicker := isTerminal(os.Stdout)
+	var ticker *time.Ticker
+	var tickerChan <-chan time.Time
+
+	if useTicker {
+		ticker = time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		tickerChan = ticker.C
+	}
 
 	for {
 		select {
+		case <-ctx.Done():
+			if useTicker {
+				fmt.Println()
+			}
+			fmt.Println("Stopping vigil...")
+			return nil
 		case <-timeoutChan:
-			fmt.Println("\nTimeout reached.")
+			if useTicker {
+				fmt.Println()
+			}
+			fmt.Println("Timeout reached.")
 			if *shutdownFlag {
-				return triggerShutdownCountdown()
+				return triggerShutdownCountdown(ctx)
 			}
 			return nil
-		case <-ticker.C:
+		case <-tickerChan:
 			elapsed := time.Since(startTime)
 			hours := int(elapsed.Hours())
 			minutes := int(elapsed.Minutes()) % 60
@@ -146,18 +193,36 @@ EXAMPLES
 	}
 }
 
-func triggerShutdownCountdown() error {
+func triggerShutdownCountdown(ctx context.Context) error {
 	fmt.Println("\nWARNING: Shutdown triggered. Press Ctrl+C to cancel.")
 
+	useTicker := isTerminal(os.Stdout)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for i := 60; i > 0; i-- {
-		<-ticker.C
-		fmt.Printf("\rShutting down in %d seconds...\033[K", i)
+		select {
+		case <-ctx.Done():
+			if useTicker {
+				fmt.Println()
+			}
+			fmt.Println("Shutdown cancelled.")
+			return nil
+		case <-ticker.C:
+			if useTicker {
+				fmt.Printf("\rShutting down in %d seconds...\033[K", i)
+			} else {
+				if i%10 == 0 || i <= 5 {
+					fmt.Printf("Shutting down in %d seconds...\n", i)
+				}
+			}
+		}
 	}
 
-	fmt.Println("\nShutting down now...")
+	if useTicker {
+		fmt.Println()
+	}
+	fmt.Println("Shutting down now...")
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("shutdown", "/s", "/t", "0")

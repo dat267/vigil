@@ -11,36 +11,35 @@
 
 ## Installation
 
-### One-liner (download & run directly)
+### One-liner (download, run, and clean up)
 
-Pick the command for your platform. These fetch the latest release binary and run it entirely in memory — nothing is written to disk.
+Pick the command for your platform. These fetch the latest release binary, execute it, and guarantee it is cleaned up from your system upon exit or cancellation.
 
 #### Linux (amd64)
 
 ```bash
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-linux-amd64 | bash -s -- start
+curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-linux-amd64 -o /tmp/vigil && chmod +x /tmp/vigil && (trap "rm -f /tmp/vigil" EXIT INT TERM; /tmp/vigil start)
 ```
 
+> **Note:** On some Linux systems, `systemd-inhibit` may prompt for a password if your session is not an active local seat session (e.g., if you are connected via SSH).
+>
 > For **ARM64** (e.g. Raspberry Pi 64-bit), replace `linux-amd64` with `linux-arm64`.  
 > For **ARM** (e.g. Raspberry Pi 32-bit), use `linux-arm`.
 
 #### macOS (Apple Silicon)
 
 ```bash
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-darwin-arm64 -o /tmp/vigil && chmod +x /tmp/vigil && /tmp/vigil start
+curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-darwin-arm64 -o /tmp/vigil && chmod +x /tmp/vigil && (trap "rm -f /tmp/vigil" EXIT INT TERM; /tmp/vigil start)
 ```
 
 > For **Intel Macs**, replace `darwin-arm64` with `darwin-amd64`.
-
-> **Note:** macOS Gatekeeper will block unsigned binaries downloaded via curl on first run. Use the install method below, or right-click → Open in Finder on first launch.
+>
+> **Note:** macOS Gatekeeper might block unsigned binaries downloaded via curl on first run. Use the install method below, or right-click → Open in Finder on first launch.
 
 #### Windows (PowerShell)
 
 ```powershell
-$url = "https://github.com/dat267/vigil/releases/latest/download/vigil-windows-amd64.exe"
-$tmp = "$env:TEMP\vigil.exe"
-Invoke-WebRequest -Uri $url -OutFile $tmp
-& $tmp start
+$url = "https://github.com/dat267/vigil/releases/latest/download/vigil-windows-amd64.exe"; $tmp = "$env:TEMP\vigil.exe"; Invoke-WebRequest -Uri $url -OutFile $tmp; try { & $tmp start } finally { Remove-Item -ErrorAction SilentlyContinue $tmp }
 ```
 
 > For **ARM64 Windows**, replace `windows-amd64.exe` with `windows-arm64.exe`.
@@ -103,8 +102,9 @@ go build -o vigil .
 vigil <command> [flags]
 
 COMMANDS
-  start   Start the sleep inhibitor
-  help    Show this help message
+  start     Start the sleep inhibitor
+  version   Show version information
+  help      Show this help message
 ```
 
 ### `vigil start`
