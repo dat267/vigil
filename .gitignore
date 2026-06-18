@@ -1,7 +1,11 @@
 # Build output
-/adl
-/adl.exe
+/vigil
+/vigil.exe
 /dist/
+
+# Test output
+*.test
+*.out
 
 # Temp download dirs
 .downloading/
