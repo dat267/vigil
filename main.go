@@ -188,7 +188,7 @@ EXAMPLES
 			minutes := int(elapsed.Minutes()) % 60
 			seconds := int(elapsed.Seconds()) % 60
 
-			fmt.Printf("\rElapsed: %02d:%02d:%02d\033[K", hours, minutes, seconds)
+			writeElapsed(hours, minutes, seconds)
 		}
 	}
 }
@@ -210,7 +210,7 @@ func triggerShutdownCountdown(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			if useTicker {
-				fmt.Printf("\rShutting down in %d seconds...\033[K", i)
+				writeShutdownCountdown(i)
 			} else {
 				if i%10 == 0 || i <= 5 {
 					fmt.Printf("Shutting down in %d seconds...\n", i)
@@ -234,4 +234,94 @@ func triggerShutdownCountdown(ctx context.Context) error {
 		return fmt.Errorf("failed to execute system shutdown (ensure you have administrative/sudo privileges): %w", err)
 	}
 	return nil
+}
+
+func writeElapsed(hours, minutes, seconds int) {
+	var buf [64]byte
+	const prefix = "\rElapsed: "
+	copy(buf[:], prefix)
+	idx := len(prefix)
+
+	idx = appendInt(buf[:], idx, hours)
+
+	buf[idx] = ':'
+	idx++
+
+	idx = appendInt2(buf[:], idx, minutes)
+
+	buf[idx] = ':'
+	idx++
+
+	idx = appendInt2(buf[:], idx, seconds)
+
+	const suffix = "\033[K"
+	copy(buf[idx:], suffix)
+	idx += len(suffix)
+
+	_, _ = os.Stdout.Write(buf[:idx])
+}
+
+func writeShutdownCountdown(seconds int) {
+	var buf [64]byte
+	const prefix = "\rShutting down in "
+	copy(buf[:], prefix)
+	idx := len(prefix)
+
+	idx = appendIntRaw(buf[:], idx, seconds)
+
+	const suffix = " seconds...\033[K"
+	copy(buf[idx:], suffix)
+	idx += len(suffix)
+
+	_, _ = os.Stdout.Write(buf[:idx])
+}
+
+func appendInt(buf []byte, idx int, val int) int {
+	if val == 0 {
+		buf[idx] = '0'
+		buf[idx+1] = '0'
+		return idx + 2
+	}
+	if val < 10 {
+		buf[idx] = '0'
+		buf[idx+1] = byte('0' + val)
+		return idx + 2
+	}
+	var digits [16]byte
+	dIdx := 0
+	for val > 0 {
+		digits[dIdx] = byte('0' + val%10)
+		dIdx++
+		val /= 10
+	}
+	for i := dIdx - 1; i >= 0; i-- {
+		buf[idx] = digits[i]
+		idx++
+	}
+	return idx
+}
+
+func appendInt2(buf []byte, idx int, val int) int {
+	buf[idx] = byte('0' + val/10)
+	buf[idx+1] = byte('0' + val%10)
+	return idx + 2
+}
+
+func appendIntRaw(buf []byte, idx int, val int) int {
+	if val == 0 {
+		buf[idx] = '0'
+		return idx + 1
+	}
+	var digits [16]byte
+	dIdx := 0
+	for val > 0 {
+		digits[dIdx] = byte('0' + val%10)
+		dIdx++
+		val /= 10
+	}
+	for i := dIdx - 1; i >= 0; i-- {
+		buf[idx] = digits[i]
+		idx++
+	}
+	return idx
 }

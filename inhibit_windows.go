@@ -14,9 +14,12 @@ const (
 	esDisplayRequired = 0x00000002
 )
 
+var (
+	kernel32                = syscall.NewLazyDLL("kernel32.dll")
+	setThreadExecutionState = kernel32.NewProc("SetThreadExecutionState")
+)
+
 func startInhibit() (func(), error) {
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	setThreadExecutionState := kernel32.NewProc("SetThreadExecutionState")
 
 	// Lock the goroutine to the current OS thread because SetThreadExecutionState is thread-local.
 	runtime.LockOSThread()
