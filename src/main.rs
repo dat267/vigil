@@ -64,7 +64,7 @@ fn help() {
         "\
 Usage: vigil [-t <duration>] [-s]
 
-Start a vigil (stay awake) session.
+Keep your system awake.
 
 Flags:
   -t, --timeout <duration>  Stay awake for this long (e.g. 2h, 45m, 30s). \
@@ -169,17 +169,17 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
 
-    if i >= args.len() || args[i] == "-h" || args[i] == "--help" || args[i] == "help" {
+    if i < args.len() && args[i] == "start" {
+        i += 1;
+    }
+
+    if i < args.len() && (args[i] == "-h" || args[i] == "--help" || args[i] == "help") {
         help();
         return ExitCode::SUCCESS;
     }
 
     let mut timeout: Option<Duration> = None;
     let mut shutdown = false;
-
-    if i < args.len() && args[i] == "start" {
-        i += 1;
-    }
 
     while i < args.len() {
         match args[i].as_str() {
