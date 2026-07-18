@@ -1,175 +1,49 @@
 # vigil
 
-**vigil** keeps your system awake — preventing sleep, suspend, and idle screen blanking — for as long as you need.
+Keep your system awake. Works on Linux, macOS, and Windows.
 
-## Features
-
-- Works on **Linux**, **macOS**, and **Windows**
-- Optional **timed duration** — exit automatically after N hours/minutes/seconds
-- Optional **system shutdown** when the timer expires
-- Single static binary, no dependencies
-
-## Installation
-
-### One-liner (download, run, and clean up)
-
-Pick the command for your platform. These fetch the latest release binary, execute it, and guarantee it is cleaned up from your system upon exit or cancellation.
-
-#### Linux (amd64)
+## Install
 
 ```bash
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-linux-amd64 -o /tmp/vigil && chmod +x /tmp/vigil && (trap "rm -f /tmp/vigil" EXIT INT TERM; /tmp/vigil start)
+# Linux (amd64)
+curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-linux-amd64 -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
+
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-darwin-arm64 -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
+
+# Build from source (Go 1.25+)
+go install github.com/dat267/vigil@latest
 ```
 
-> **Note:** On some Linux systems, `systemd-inhibit` may prompt for a password if your session is not an active local seat session (e.g., if you are connected via SSH).
+> **Windows:** Download `vigil-windows-amd64.exe` from [releases](https://github.com/dat267/vigil/releases) and add it to your PATH.
 >
-> For **ARM64** (e.g. Raspberry Pi 64-bit), replace `linux-amd64` with `linux-arm64`.  
-> For **ARM** (e.g. Raspberry Pi 32-bit), use `linux-arm`.
-
-#### macOS (Apple Silicon)
-
-```bash
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-darwin-arm64 -o /tmp/vigil && chmod +x /tmp/vigil && (trap "rm -f /tmp/vigil" EXIT INT TERM; /tmp/vigil start)
-```
-
-> For **Intel Macs**, replace `darwin-arm64` with `darwin-amd64`.
+> **Other architectures:** `linux-arm64`, `linux-arm`, `darwin-amd64`, `windows-arm64.exe`
 >
-> **Note:** macOS Gatekeeper might block unsigned binaries downloaded via curl on first run. Use the install method below, or right-click → Open in Finder on first launch.
-
-#### Windows (PowerShell)
-
-```powershell
-$url = "https://github.com/dat267/vigil/releases/latest/download/vigil-windows-amd64.exe"; $tmp = "$env:TEMP\vigil.exe"; Invoke-WebRequest -Uri $url -OutFile $tmp; try { & $tmp start } finally { Remove-Item -ErrorAction SilentlyContinue $tmp }
-```
-
-> For **ARM64 Windows**, replace `windows-amd64.exe` with `windows-arm64.exe`.
-
----
-
-### Install to PATH (recommended)
-
-#### Linux / macOS
-
-```bash
-# Linux amd64
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-linux-amd64 \
-  -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
-
-# macOS Apple Silicon
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-darwin-arm64 \
-  -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
-```
-
-Make sure `~/.local/bin` is on your `$PATH`:
-
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
-```
-
-#### Windows (PowerShell)
-
-```powershell
-$url = "https://github.com/dat267/vigil/releases/latest/download/vigil-windows-amd64.exe"
-$dest = "$env:USERPROFILE\.local\bin\vigil.exe"
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.local\bin" | Out-Null
-Invoke-WebRequest -Uri $url -OutFile $dest
-# Add to PATH (current user, permanent)
-$path = [Environment]::GetEnvironmentVariable("PATH", "User")
-if ($path -notlike "*\.local\bin*") {
-  [Environment]::SetEnvironmentVariable("PATH", "$path;$env:USERPROFILE\.local\bin", "User")
-}
-```
-
-Restart your terminal, then run `vigil`.
-
----
-
-### Build from source
-
-Requires [Go 1.25+](https://go.dev/dl/).
-
-```bash
-git clone https://github.com/dat267/vigil.git
-cd vigil
-go build -o vigil .
-```
-
----
+> **Linux via SSH:** `systemd-inhibit` requires an active local seat session. Run with `sudo` if denied.
 
 ## Usage
 
 ```
-vigil <command> [flags]
-
-COMMANDS
-  start     Start the sleep inhibitor
-  version   Show version information
-
-Flags:
-  -h, --help    Show context-sensitive help.
+vigil start                  # Stay awake indefinitely (Ctrl+C to stop)
+vigil start -t 2h            # Stay awake for 2 hours, then exit
+vigil start -t 45m -s        # Stay awake for 45 minutes, then shut down
+vigil version
 ```
 
-### `vigil start`
+**`vigil start` flags:**
 
-```
-vigil start [flags]
-
-FLAGS
-  -t, --timeout=DURATION   Stay awake for the given duration, then exit.
-                           Accepts Go duration strings: e.g. 30s, 45m, 2h, 1h30m.
-                           Omit to run indefinitely.
-
-  -s, --shutdown           Shut down the system after the timeout (-t) expires.
-                           Requires -t; cannot be used alone.
-
-  -h, --help               Show this help.
-```
-
-### Examples
-
-```bash
-# Keep awake indefinitely (Ctrl+C to stop)
-vigil start
-
-# Keep awake for 2 hours, then exit
-vigil start -t 2h
-
-# Keep awake for 1 hour 30 minutes
-vigil start -t 1h30m
-
-# Keep awake for 45 minutes, then shut down the system
-vigil start -t 45m -s
-```
-
----
+| Flag | Description |
+|------|-------------|
+| `-t, --timeout=DURATION` | Duration to stay awake (e.g. `30s`, `45m`, `2h`, `1h30m`). Omit for indefinite. |
+| `-s, --shutdown` | Shut down the system when the timeout expires. Requires `-t`. |
 
 ## How it works
 
 | Platform | Mechanism |
 |----------|-----------|
-| **Linux** | Calls `systemd-inhibit --what=idle:sleep` to block both idle and sleep inhibitors via logind |
-| **macOS** | Runs `caffeinate -d -i -w <pid>` to prevent display sleep and system idle sleep; exits automatically when vigil exits |
-| **Windows** | Calls `SetThreadExecutionState` with `ES_CONTINUOUS \| ES_SYSTEM_REQUIRED \| ES_DISPLAY_REQUIRED` |
-
----
-
-## Releases
-
-Binaries are built and published automatically on every push to `main` via GitHub Actions.
-
-| Platform | Architecture | Binary |
-|----------|-------------|--------|
-| Linux | amd64 | `vigil-linux-amd64` |
-| Linux | arm64 | `vigil-linux-arm64` |
-| Linux | arm | `vigil-linux-arm` |
-| macOS | amd64 (Intel) | `vigil-darwin-amd64` |
-| macOS | arm64 (Apple Silicon) | `vigil-darwin-arm64` |
-| Windows | amd64 | `vigil-windows-amd64.exe` |
-| Windows | arm64 | `vigil-windows-arm64.exe` |
-
-Browse all releases: [github.com/dat267/vigil/releases](https://github.com/dat267/vigil/releases)
-
----
+| Linux    | `systemd-inhibit --what=idle:sleep` via logind |
+| macOS    | `caffeinate -d -i -w <pid>` (exits automatically when vigil exits) |
+| Windows  | `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED \| ES_DISPLAY_REQUIRED)` |
 
 ## License
 
