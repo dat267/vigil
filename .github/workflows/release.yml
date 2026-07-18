@@ -96,11 +96,17 @@ jobs:
         if: runner.os != 'Windows'
         run: ${{ matrix.strip }} target/${{ matrix.target }}/release/vigil${{ matrix.ext }}
 
+      - name: Rename binary
+        run: |
+          SRC="target/${{ matrix.target }}/release/vigil${{ matrix.ext }}"
+          DST="target/${{ matrix.target }}/release/${{ env.BIN_NAME }}-${{ matrix.target }}${{ matrix.ext }}"
+          mv "$SRC" "$DST"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.BIN_NAME }}-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/vigil${{ matrix.ext }}
+          path: target/${{ matrix.target }}/release/${{ env.BIN_NAME }}-${{ matrix.target }}${{ matrix.ext }}
 
   release:
     needs: build
