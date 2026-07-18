@@ -86,7 +86,7 @@ Restart your terminal, then run `vigil`.
 
 ### Build from source
 
-Requires [Go 1.21+](https://go.dev/dl/).
+Requires [Go 1.25+](https://go.dev/dl/).
 
 ```bash
 git clone https://github.com/dat267/vigil.git
@@ -104,7 +104,9 @@ vigil <command> [flags]
 COMMANDS
   start     Start the sleep inhibitor
   version   Show version information
-  help      Show this help message
+
+Flags:
+  -h, --help    Show context-sensitive help.
 ```
 
 ### `vigil start`
@@ -113,14 +115,14 @@ COMMANDS
 vigil start [flags]
 
 FLAGS
-  -t <duration>   Stay awake for the given duration, then exit.
-                  Accepts Go duration strings: e.g. 30s, 45m, 2h, 1h30m.
-                  Omit to run indefinitely.
+  -t, --timeout=DURATION   Stay awake for the given duration, then exit.
+                           Accepts Go duration strings: e.g. 30s, 45m, 2h, 1h30m.
+                           Omit to run indefinitely.
 
-  -s              Shut down the system after the timeout (-t) expires.
-                  Requires -t; cannot be used alone.
+  -s, --shutdown           Shut down the system after the timeout (-t) expires.
+                           Requires -t; cannot be used alone.
 
-  -h              Show this help.
+  -h, --help               Show this help.
 ```
 
 ### Examples
@@ -146,7 +148,7 @@ vigil start -t 45m -s
 | Platform | Mechanism |
 |----------|-----------|
 | **Linux** | Calls `systemd-inhibit --what=idle:sleep` to block both idle and sleep inhibitors via logind |
-| **macOS** | Runs `caffeinate -d -i` to prevent display sleep and system idle sleep |
+| **macOS** | Runs `caffeinate -d -i -w <pid>` to prevent display sleep and system idle sleep; exits automatically when vigil exits |
 | **Windows** | Calls `SetThreadExecutionState` with `ES_CONTINUOUS \| ES_SYSTEM_REQUIRED \| ES_DISPLAY_REQUIRED` |
 
 ---
