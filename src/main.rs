@@ -12,38 +12,18 @@ mod platform;
 #[path = "windows.rs"]
 mod platform;
 
-#[cfg(unix)]
-mod sig {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static HIT: AtomicBool = AtomicBool::new(false);
-    const SIGINT: i32 = 2;
-    const SIGTERM: i32 = 15;
-    extern "C" fn handler(_: i32) {
-        HIT.store(true, Ordering::Relaxed);
-    }
-    pub fn install() {
-        extern "C" {
-            fn signal(sig: i32, cb: extern "C" fn(i32)) -> usize;
-        }
-        unsafe {
-            signal(SIGINT, handler);
-            signal(SIGTERM, handler);
-        }
-    }
-    pub fn check() -> bool {
-        HIT.swap(false, Ordering::Relaxed)
-    }
-}
-
 #[cfg(windows)]
 mod sig {
     use std::sync::atomic::{AtomicBool, Ordering};
     static HIT: AtomicBool = AtomicBool::new(false);
-    unsafe extern "system" fn handler(_: u32) -> i32 {
-        HIT.store(true, Ordering::Relaxed);
-        1
+    pub fn check() -> bool {
+        HIT.swap(false, Ordering::Relaxed)
     }
     pub fn install() {
+        unsafe extern "system" fn handler(_: u32) -> i32 {
+            HIT.store(true, Ordering::Relaxed);
+            1
+        }
         extern "system" {
             fn SetConsoleCtrlHandler(
                 handler: Option<unsafe extern "system" fn(u32) -> i32>,
@@ -53,9 +33,6 @@ mod sig {
         unsafe {
             SetConsoleCtrlHandler(Some(handler), 1);
         }
-    }
-    pub fn check() -> bool {
-        HIT.swap(false, Ordering::Relaxed)
     }
 }
 
@@ -141,6 +118,7 @@ fn trigger_shutdown() {
     println!("\nShutting down in 60 seconds. Press Ctrl+C to cancel.");
     let tty = std::io::stdout().is_terminal();
     for i in (1..=60).rev() {
+        #[cfg(windows)]
         if sig::check() {
             println!("\nShutdown cancelled.");
             return;
@@ -215,6 +193,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
+    #[cfg(windows)]
     sig::install();
     let _guard = platform::start_inhibit();
 
@@ -227,6 +206,7 @@ fn main() -> ExitCode {
     }
 
     loop {
+        #[cfg(windows)]
         if sig::check() {
             if tty {
                 println!("\rStopped.              ");
