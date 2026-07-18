@@ -12,14 +12,6 @@ mod platform;
 #[path = "windows.rs"]
 mod platform;
 
-const VERSION: &str = {
-    if let Some(v) = option_env!("VIGIL_VERSION") {
-        v
-    } else {
-        env!("CARGO_PKG_VERSION")
-    }
-};
-
 #[cfg(unix)]
 mod sig {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,9 +62,7 @@ mod sig {
 fn help() {
     println!(
         "\
-Usage: vigil [start] [-t <duration>] [-s]
-       vigil version
-       vigil --help
+Usage: vigil [-t <duration>] [-s]
 
 Start a vigil (stay awake) session.
 
@@ -181,11 +171,6 @@ fn main() -> ExitCode {
 
     if i >= args.len() || args[i] == "-h" || args[i] == "--help" || args[i] == "help" {
         help();
-        return ExitCode::SUCCESS;
-    }
-
-    if args[i] == "version" {
-        println!("vigil {VERSION}");
         return ExitCode::SUCCESS;
     }
 

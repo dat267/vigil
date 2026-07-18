@@ -24,10 +24,9 @@ cargo install --git https://github.com/dat267/vigil
 ## Usage
 
 ```
-vigil start                  # Stay awake indefinitely (Ctrl+C to stop)
-vigil start -t 2h            # Stay awake for 2 hours, then exit
-vigil start -t 45m -s        # Stay awake for 45 minutes, then shut down
-vigil version
+vigil                        # Stay awake indefinitely (Ctrl+C to stop)
+vigil -t 2h                  # Stay awake for 2 hours, then exit
+vigil -t 45m -s              # Stay awake for 45 minutes, then shut down
 ```
 
 **Flags:**

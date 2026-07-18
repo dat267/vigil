@@ -77,8 +77,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.pkg }}
 
       - name: Build
-        env:
-          VIGIL_VERSION: ${{ env.BIN_NAME }}/${{ github.sha }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Strip binary (Unix)
