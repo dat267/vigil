@@ -2,151 +2,95 @@ package main
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/alecthomas/kong"
 )
 
 var version = "dev"
 
+// CLI is the root command structure parsed by kong.
+type CLI struct {
+	Start   StartCmd   `cmd:"" help:"Start the sleep inhibitor"`
+	Version VersionCmd `cmd:"" help:"Show version information"`
+}
+
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	// Resolve the binary name the same way min does.
+	appName := filepath.Base(os.Args[0])
+	appName = strings.TrimSuffix(appName, filepath.Ext(appName))
+	if appName == "" || appName == "main" || strings.HasPrefix(appName, "go-build") || strings.HasSuffix(appName, ".test") {
+		appName = "vigil"
+	}
+
+	cli := &CLI{}
+	ctx, err := kong.New(cli,
+		kong.Name(appName),
+		kong.Description("Keep your system awake."),
+		kong.UsageOnError(),
+		kong.ConfigureHelp(kong.HelpOptions{
+			Compact: true,
+			Tree:    true,
+		}),
+	)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
+
+	kctx, err := ctx.Parse(os.Args[1:])
+	ctx.FatalIfErrorf(err)
+
+	// Inject a cancellable context that is cancelled on SIGINT/SIGTERM.
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	kctx.BindTo(sigCtx, (*context.Context)(nil))
+
+	kctx.FatalIfErrorf(kctx.Run())
 }
 
-func printHelp() {
-	fmt.Print(`vigil — keep your system awake
+// ---------------------------------------------------------------------------
+// start subcommand
+// ---------------------------------------------------------------------------
 
-USAGE
-  vigil <command> [flags]
-
-COMMANDS
-  start     Start the sleep inhibitor
-  version   Show version information
-  help      Show this help message
-
-Run 'vigil <command> -h' for command-specific help.
-
-EXAMPLES
-  vigil start               Keep awake indefinitely (Ctrl+C to stop)
-  vigil start -t 2h         Keep awake for 2 hours, then exit
-  vigil start -t 45m -s     Keep awake for 45 minutes, then shut down
-
-`)
+// StartCmd starts the sleep inhibitor.
+type StartCmd struct {
+	Timeout  time.Duration `short:"t" help:"Stay awake for this duration, then exit (e.g. 2h, 45m, 30s). Omit to run indefinitely." placeholder:"DURATION"`
+	Shutdown bool          `short:"s" help:"Shut down the system when the timeout expires. Requires -t."`
 }
 
-func printVersion() {
-	fmt.Printf("vigil %s\n", version)
+func (cmd *StartCmd) Validate() error {
+	if cmd.Shutdown && cmd.Timeout == 0 {
+		return fmt.Errorf("cannot use -s (shutdown) without specifying a timeout duration via -t")
+	}
+	if cmd.Timeout < 0 {
+		return fmt.Errorf("timeout duration must be positive")
+	}
+	return nil
 }
 
-func isTerminal(f *os.File) bool {
-	stat, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return (stat.Mode() & os.ModeCharDevice) != 0
-}
-
-var startInhibitFn = startInhibit
-
-func run(args []string) error {
-	if len(args) == 0 {
-		printHelp()
-		return nil
-	}
-
-	switch args[0] {
-	case "start":
-		return cmdStart(args[1:])
-	case "version", "-v", "--version":
-		printVersion()
-		return nil
-	case "help", "-h", "--help":
-		printHelp()
-		return nil
-	default:
-		printHelp()
-		return fmt.Errorf("unknown command %q", args[0])
-	}
-}
-
-func cmdStart(args []string) error {
-	fs := flag.NewFlagSet("vigil start", flag.ContinueOnError)
-	timeoutFlag := fs.String("t", "", "Duration to stay awake (e.g. 2h, 45m, 30s, 1h30m)")
-	shutdownFlag := fs.Bool("s", false, "Shut down the system when the timeout expires")
-
-	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `vigil start — start the sleep inhibitor
-
-USAGE
-  vigil start [flags]
-
-FLAGS
-  -t <duration>   Stay awake for the given duration, then exit.
-                  Accepts Go duration strings: e.g. 30s, 45m, 2h, 1h30m.
-                  Omit to run indefinitely.
-
-  -s              Shut down the system after the timeout (-t) expires.
-                  Requires -t; cannot be used alone.
-
-  -h              Show this help message.
-
-EXAMPLES
-  vigil start               Keep awake indefinitely (Ctrl+C to stop)
-  vigil start -t 2h         Keep awake for 2 hours, then exit
-  vigil start -t 1h30m      Keep awake for 1 hour 30 minutes
-  vigil start -t 45m -s     Keep awake for 45 minutes, then shut down
-
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return nil
-		}
-		return err
-	}
-
-	if *shutdownFlag && *timeoutFlag == "" {
-		return errors.New("cannot use -s (shutdown) without specifying a timeout duration via -t")
-	}
-
-	var dur time.Duration
-	if *timeoutFlag != "" {
-		var err error
-		dur, err = time.ParseDuration(*timeoutFlag)
-		if err != nil {
-			return fmt.Errorf("invalid timeout %q: %w", *timeoutFlag, err)
-		}
-		if dur <= 0 {
-			return errors.New("timeout duration must be positive")
-		}
-	}
-
+func (cmd *StartCmd) Run(ctx context.Context) error {
 	stopInhibit, err := startInhibitFn()
 	if err != nil {
 		return fmt.Errorf("failed to initialize sleep inhibitor: %w", err)
 	}
 	defer stopInhibit()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	startTime := time.Now()
 	var timeoutChan <-chan time.Time
 
-	if dur > 0 {
-		timeoutChan = time.After(dur)
-		stopTime := startTime.Add(dur).Format(time.DateTime)
-		if *shutdownFlag {
+	if cmd.Timeout > 0 {
+		timeoutChan = time.After(cmd.Timeout)
+		stopTime := startTime.Add(cmd.Timeout).Format(time.DateTime)
+		if cmd.Shutdown {
 			fmt.Printf("Vigil active until %s (with system shutdown).\nPress Ctrl+C to stop.\n", stopTime)
 		} else {
 			fmt.Printf("Vigil active until %s.\nPress Ctrl+C to stop.\n", stopTime)
@@ -160,7 +104,7 @@ EXAMPLES
 	var tickerChan <-chan time.Time
 
 	if useTicker {
-		ticker = time.NewTicker(1 * time.Second)
+		ticker = time.NewTicker(time.Second)
 		defer ticker.Stop()
 		tickerChan = ticker.C
 	}
@@ -178,26 +122,48 @@ EXAMPLES
 				fmt.Println()
 			}
 			fmt.Println("Timeout reached.")
-			if *shutdownFlag {
+			if cmd.Shutdown {
 				return triggerShutdownCountdown(ctx)
 			}
 			return nil
 		case <-tickerChan:
 			elapsed := time.Since(startTime)
-			hours := int(elapsed.Hours())
-			minutes := int(elapsed.Minutes()) % 60
-			seconds := int(elapsed.Seconds()) % 60
-
-			writeElapsed(hours, minutes, seconds)
+			writeElapsed(int(elapsed.Hours()), int(elapsed.Minutes())%60, int(elapsed.Seconds())%60)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// version subcommand
+// ---------------------------------------------------------------------------
+
+// VersionCmd prints the build version.
+type VersionCmd struct{}
+
+func (cmd *VersionCmd) Run() error {
+	fmt.Printf("vigil %s\n", version)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// helpers (unchanged)
+// ---------------------------------------------------------------------------
+
+var startInhibitFn = startInhibit
+
+func isTerminal(f *os.File) bool {
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
 func triggerShutdownCountdown(ctx context.Context) error {
 	fmt.Println("\nWARNING: Shutdown triggered. Press Ctrl+C to cancel.")
 
 	useTicker := isTerminal(os.Stdout)
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for i := 60; i > 0; i-- {
@@ -236,28 +202,23 @@ func triggerShutdownCountdown(ctx context.Context) error {
 	return nil
 }
 
+// Zero-allocation progress formatters.
+
 func writeElapsed(hours, minutes, seconds int) {
 	var buf [64]byte
 	const prefix = "\rElapsed: "
 	copy(buf[:], prefix)
 	idx := len(prefix)
-
 	idx = appendInt(buf[:], idx, hours)
-
 	buf[idx] = ':'
 	idx++
-
 	idx = appendInt2(buf[:], idx, minutes)
-
 	buf[idx] = ':'
 	idx++
-
 	idx = appendInt2(buf[:], idx, seconds)
-
 	const suffix = "\033[K"
 	copy(buf[idx:], suffix)
 	idx += len(suffix)
-
 	_, _ = os.Stdout.Write(buf[:idx])
 }
 
@@ -266,22 +227,14 @@ func writeShutdownCountdown(seconds int) {
 	const prefix = "\rShutting down in "
 	copy(buf[:], prefix)
 	idx := len(prefix)
-
 	idx = appendIntRaw(buf[:], idx, seconds)
-
 	const suffix = " seconds...\033[K"
 	copy(buf[idx:], suffix)
 	idx += len(suffix)
-
 	_, _ = os.Stdout.Write(buf[:idx])
 }
 
 func appendInt(buf []byte, idx int, val int) int {
-	if val == 0 {
-		buf[idx] = '0'
-		buf[idx+1] = '0'
-		return idx + 2
-	}
 	if val < 10 {
 		buf[idx] = '0'
 		buf[idx+1] = byte('0' + val)
