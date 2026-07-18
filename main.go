@@ -160,9 +160,13 @@ func isTerminal(f *os.File) bool {
 }
 
 func triggerShutdownCountdown(ctx context.Context) error {
-	fmt.Println("\nWARNING: Shutdown triggered. Press Ctrl+C to cancel.")
-
 	useTicker := isTerminal(os.Stdout)
+	if useTicker {
+		fmt.Println()
+	}
+	fmt.Println("WARNING: Shutdown triggered. Press Ctrl+C to cancel.")
+
+
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
