@@ -6,18 +6,18 @@ Keep your system awake. Works on Linux, macOS, and Windows.
 
 ```bash
 # Linux (amd64)
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-linux-amd64 -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
+curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-x86_64-unknown-linux-gnu -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
 
 # macOS (Apple Silicon)
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-darwin-arm64 -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
+curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-aarch64-apple-darwin -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
 
-# Build from source (Go 1.25+)
-go install github.com/dat267/vigil@latest
+# Build from source (Rust stable)
+cargo install --git https://github.com/dat267/vigil
 ```
 
-> **Windows:** Download `vigil-windows-amd64.exe` from [releases](https://github.com/dat267/vigil/releases) and add it to your PATH.
+> **Windows:** Download `vigil-x86_64-pc-windows-msvc.exe` from [releases](https://github.com/dat267/vigil/releases) and add it to your PATH.
 >
-> **Other architectures:** `linux-arm64`, `linux-arm`, `darwin-amd64`, `windows-arm64.exe`
+> **Other architectures:** `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, `x86_64-apple-darwin`, `aarch64-pc-windows-msvc`
 >
 > **Linux via SSH:** `systemd-inhibit` requires an active local seat session. Run with `sudo` if denied.
 
@@ -30,7 +30,7 @@ vigil start -t 45m -s        # Stay awake for 45 minutes, then shut down
 vigil version
 ```
 
-**`vigil start` flags:**
+**Flags:**
 
 | Flag | Description |
 |------|-------------|
@@ -44,6 +44,14 @@ vigil version
 | Linux    | `systemd-inhibit --what=idle:sleep` via logind |
 | macOS    | `caffeinate -d -i -w <pid>` (exits automatically when vigil exits) |
 | Windows  | `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED \| ES_DISPLAY_REQUIRED)` |
+
+## Build
+
+```bash
+cargo build --release
+```
+
+Binary is at `target/release/vigil`.
 
 ## License
 

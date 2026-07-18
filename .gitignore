@@ -1,11 +1,1 @@
-# Build output
-/vigil
-/vigil.exe
-/dist/
-
-# Test output
-*.test
-*.out
-
-# Temp download dirs
-.downloading/
+/target

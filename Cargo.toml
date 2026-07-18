@@ -1,0 +1,11 @@
+[package]
+name = "vigil"
+version = "0.0.0"
+edition = "2021"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
