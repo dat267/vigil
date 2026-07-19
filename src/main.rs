@@ -73,7 +73,10 @@ fn init_console() {
         }
 
         let con_out: isize = CreateFileW(
-            [0x0043u16, 0x004F, 0x004E, 0x004F, 0x0055, 0x0054, 0x0024, 0x0000].as_ptr(),
+            [
+                0x0043u16, 0x004F, 0x004E, 0x004F, 0x0055, 0x0054, 0x0024, 0x0000,
+            ]
+            .as_ptr(),
             GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             std::ptr::null_mut(),
@@ -191,9 +194,7 @@ fn trigger_shutdown() {
             use std::io::Write;
             print!("\rShutting down in {i}s... ");
             std::io::stdout().flush().ok();
-        } else if !tty && !QUIET.load(Ordering::Relaxed)
-            && (i == 60 || i <= 5 || i % 10 == 0)
-        {
+        } else if !tty && !QUIET.load(Ordering::Relaxed) && (i == 60 || i <= 5 || i % 10 == 0) {
             println!("Shutting down in {i}s...");
         }
         std::thread::sleep(Duration::from_secs(1));
