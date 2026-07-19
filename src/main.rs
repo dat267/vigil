@@ -1,5 +1,8 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::io::IsTerminal;
 use std::process::{Command, ExitCode};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
@@ -11,6 +14,8 @@ mod platform;
 #[cfg(target_os = "windows")]
 #[path = "windows.rs"]
 mod platform;
+
+pub(crate) static QUIET: AtomicBool = AtomicBool::new(false);
 
 #[cfg(windows)]
 mod sig {
@@ -36,10 +41,57 @@ mod sig {
     }
 }
 
+#[cfg(windows)]
+fn init_console() {
+    unsafe {
+        extern "system" {
+            fn AttachConsole(dwProcessId: u32) -> i32;
+            fn AllocConsole() -> i32;
+            fn CreateFileW(
+                lpFileName: *const u16,
+                dwDesiredAccess: u32,
+                dwShareMode: u32,
+                lpSecurityAttributes: *mut std::ffi::c_void,
+                dwCreationDisposition: u32,
+                dwFlagsAndAttributes: u32,
+                hTemplateFile: isize,
+            ) -> isize;
+            fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
+        }
+        const ATTACH_PARENT_PROCESS: u32 = 0xFFFFFFFF;
+        const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5u32;
+        const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4u32;
+        const GENERIC_READ: u32 = 0x80000000;
+        const GENERIC_WRITE: u32 = 0x40000000;
+        const FILE_SHARE_READ: u32 = 1;
+        const FILE_SHARE_WRITE: u32 = 2;
+        const OPEN_EXISTING: u32 = 3;
+        const INVALID_HANDLE_VALUE: isize = -1;
+
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            AllocConsole();
+        }
+
+        let con_out: isize = CreateFileW(
+            [0x0043u16, 0x004F, 0x004E, 0x004F, 0x0055, 0x0054, 0x0024, 0x0000].as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            0,
+        );
+        if con_out != INVALID_HANDLE_VALUE {
+            SetStdHandle(STD_OUTPUT_HANDLE, con_out);
+            SetStdHandle(STD_ERROR_HANDLE, con_out);
+        }
+    }
+}
+
 fn help() {
     println!(
         "\
-Usage: vigil [-t <duration>] [-s]
+Usage: vigil [-t <duration>] [-s] [-q]
 
 Keep your system awake.
 
@@ -47,11 +99,16 @@ Flags:
   -t, --timeout <duration>  Stay awake for this long (e.g. 2h, 45m, 30s). \
                               Infinite by default.
   -s, --shutdown            Shutdown when the timeout expires (requires \
-                              --timeout)."
+                              --timeout).
+  -q, --quiet               Suppress all output; hide console window on \
+                              Windows."
     );
 }
 
 fn print_elapsed(d: Duration) {
+    if QUIET.load(Ordering::Relaxed) {
+        return;
+    }
     let s = d.as_secs();
     let h = s / 3600;
     let m = s % 3600 / 60;
@@ -68,6 +125,9 @@ fn print_elapsed(d: Duration) {
 }
 
 fn print_elapsed_np(d: Duration) {
+    if QUIET.load(Ordering::Relaxed) {
+        return;
+    }
     let s = d.as_secs();
     let h = s / 3600;
     let m = s % 3600 / 60;
@@ -115,45 +175,76 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 }
 
 fn trigger_shutdown() {
-    println!("\nShutting down in 60 seconds. Press Ctrl+C to cancel.");
+    if !QUIET.load(Ordering::Relaxed) {
+        println!("\nShutting down in 60 seconds. Press Ctrl+C to cancel.");
+    }
     let tty = std::io::stdout().is_terminal();
     for i in (1..=60).rev() {
         #[cfg(windows)]
         if sig::check() {
-            println!("\nShutdown cancelled.");
+            if !QUIET.load(Ordering::Relaxed) {
+                println!("\nShutdown cancelled.");
+            }
             return;
         }
-        if tty {
+        if tty && !QUIET.load(Ordering::Relaxed) {
             use std::io::Write;
             print!("\rShutting down in {i}s... ");
             std::io::stdout().flush().ok();
-        } else if i == 60 || i <= 5 || i % 10 == 0 {
+        } else if !tty && !QUIET.load(Ordering::Relaxed)
+            && (i == 60 || i <= 5 || i % 10 == 0)
+        {
             println!("Shutting down in {i}s...");
         }
         std::thread::sleep(Duration::from_secs(1));
     }
-    println!("\nShutting down...");
+    if !QUIET.load(Ordering::Relaxed) {
+        println!("\nShutting down...");
+    }
     #[cfg(target_os = "windows")]
     let r = Command::new("shutdown").args(["/s", "/t", "0"]).status();
     #[cfg(not(target_os = "windows"))]
     let r = Command::new("shutdown").args(["-h", "now"]).status();
     match r {
         Ok(s) if s.success() => {}
-        _ => eprintln!("warning: shutdown command failed"),
+        _ => {
+            if !QUIET.load(Ordering::Relaxed) {
+                eprintln!("warning: shutdown command failed");
+            }
+        }
     }
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    let mut i = 1;
 
-    if i < args.len() && args[i] == "start" {
-        i += 1;
+    let mut quiet = false;
+    let mut show_help = false;
+    for arg in &args[1..] {
+        match arg.as_str() {
+            "-q" | "--quiet" => quiet = true,
+            "-h" | "--help" | "help" => show_help = true,
+            _ => {}
+        }
     }
 
-    if i < args.len() && (args[i] == "-h" || args[i] == "--help" || args[i] == "help") {
+    if quiet {
+        QUIET.store(true, Ordering::Relaxed);
+    }
+
+    #[cfg(windows)]
+    if !quiet {
+        init_console();
+    }
+
+    if show_help {
         help();
         return ExitCode::SUCCESS;
+    }
+
+    let mut i = 1;
+    if i < args.len() && args[i] == "start" {
+        i += 1;
     }
 
     let mut timeout: Option<Duration> = None;
@@ -176,6 +267,7 @@ fn main() -> ExitCode {
                 }
             }
             "-s" | "--shutdown" => shutdown = true,
+            "-q" | "--quiet" => {}
             "-h" | "--help" => {
                 help();
                 return ExitCode::SUCCESS;
@@ -201,14 +293,14 @@ fn main() -> ExitCode {
     let tty = std::io::stdout().is_terminal();
     let mut last_report = Duration::ZERO;
 
-    if tty {
+    if tty && !quiet {
         println!("Vigil started. Press Ctrl+C to stop.");
     }
 
     loop {
         #[cfg(windows)]
         if sig::check() {
-            if tty {
+            if tty && !quiet {
                 println!("\rStopped.              ");
             }
             break;
@@ -218,7 +310,7 @@ fn main() -> ExitCode {
 
         if let Some(dur) = timeout {
             if elapsed >= dur {
-                if tty {
+                if tty && !quiet {
                     println!("\rTimeout reached.        ");
                 }
                 drop(_guard);
@@ -230,8 +322,8 @@ fn main() -> ExitCode {
         }
 
         let delta = elapsed - last_report;
-        let report_tty = tty && delta >= Duration::from_secs(1);
-        let report_np = !tty && {
+        let report_tty = tty && delta >= Duration::from_secs(1) && !quiet;
+        let report_np = !tty && !quiet && {
             let near_end = timeout
                 .map(|d| {
                     let rem = if d > elapsed {

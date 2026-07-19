@@ -12,7 +12,9 @@ impl InhibitGuard {
             .status();
         if let Ok(ref s) = dry {
             if !s.success() {
-                eprintln!("warning: systemd-inhibit dry-run failed");
+                if !crate::QUIET.load(std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!("warning: systemd-inhibit dry-run failed");
+                }
             }
         }
 
