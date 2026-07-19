@@ -11,9 +11,7 @@ impl InhibitGuard {
             .stderr(Stdio::null())
             .status();
         if let Ok(ref s) = dry {
-            if !s.success()
-                && !crate::QUIET.load(std::sync::atomic::Ordering::Relaxed)
-            {
+            if !s.success() && !crate::QUIET.load(std::sync::atomic::Ordering::Relaxed) {
                 eprintln!("warning: systemd-inhibit dry-run failed");
             }
         }
