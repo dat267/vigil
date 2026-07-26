@@ -108,42 +108,6 @@ Flags:
     );
 }
 
-fn print_elapsed(d: Duration) {
-    if QUIET.load(Ordering::Relaxed) {
-        return;
-    }
-    let s = d.as_secs();
-    let h = s / 3600;
-    let m = s % 3600 / 60;
-    let sec = s % 60;
-    use std::io::Write;
-    if h > 0 {
-        print!("\r{h}h {m}m {sec}s elapsed");
-    } else if m > 0 {
-        print!("\r{m}m {sec}s elapsed");
-    } else {
-        print!("\r{sec}s elapsed");
-    }
-    std::io::stdout().flush().ok();
-}
-
-fn print_elapsed_np(d: Duration) {
-    if QUIET.load(Ordering::Relaxed) {
-        return;
-    }
-    let s = d.as_secs();
-    let h = s / 3600;
-    let m = s % 3600 / 60;
-    let sec = s % 60;
-    if h > 0 {
-        println!("{h}h {m}m {sec}s elapsed");
-    } else if m > 0 {
-        println!("{m}m {sec}s elapsed");
-    } else {
-        println!("{sec}s elapsed");
-    }
-}
-
 fn parse_duration(s: &str) -> Result<Duration, String> {
     if s.is_empty() {
         return Err("empty duration".into());
@@ -292,7 +256,6 @@ fn main() -> ExitCode {
 
     let start = Instant::now();
     let tty = std::io::stdout().is_terminal();
-    let mut last_report = Duration::ZERO;
 
     if tty && !quiet {
         println!("Vigil started. Press Ctrl+C to stop.");
@@ -307,10 +270,8 @@ fn main() -> ExitCode {
             break;
         }
 
-        let elapsed = start.elapsed();
-
         if let Some(dur) = timeout {
-            if elapsed >= dur {
+            if start.elapsed() >= dur {
                 if tty && !quiet {
                     println!("\rTimeout reached.        ");
                 }
@@ -322,36 +283,7 @@ fn main() -> ExitCode {
             }
         }
 
-        let delta = elapsed - last_report;
-        let report_tty = tty && delta >= Duration::from_secs(1) && !quiet;
-        let report_np = !tty && !quiet && {
-            let near_end = timeout
-                .map(|d| {
-                    let rem = if d > elapsed {
-                        d - elapsed
-                    } else {
-                        Duration::ZERO
-                    };
-                    rem <= Duration::from_secs(5)
-                })
-                .unwrap_or(false);
-            let interval = if near_end {
-                Duration::from_secs(1)
-            } else {
-                Duration::from_secs(10)
-            };
-            delta >= interval
-        };
-
-        if report_tty {
-            print_elapsed(elapsed);
-            last_report = elapsed;
-        } else if report_np {
-            print_elapsed_np(elapsed);
-            last_report = elapsed;
-        }
-
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_secs(1));
     }
 
     ExitCode::SUCCESS
