@@ -26,6 +26,7 @@ cargo install --git https://github.com/dat267/vigil
 ```
 vigil                        # Stay awake indefinitely (Ctrl+C to stop)
 vigil -t 2h                  # Stay awake for 2 hours, then exit
+vigil --timeout=2h           # Equivalent long-option form
 vigil -t 45m -s              # Stay awake for 45 minutes, then shut down
 ```
 
@@ -33,8 +34,10 @@ vigil -t 45m -s              # Stay awake for 45 minutes, then shut down
 
 | Flag | Description |
 |------|-------------|
-| `-t, --timeout=DURATION` | Duration to stay awake (e.g. `30s`, `45m`, `2h`, `1h30m`). Omit for indefinite. |
+| `-t, --timeout <DURATION>` | Duration to stay awake (e.g. `30s`, `45m`, `2h`, `1h30m`). `--timeout=DURATION` is also accepted. Omit for indefinite. |
 | `-s, --shutdown` | Shut down the system when the timeout expires. Requires `-t`. |
+| `-q, --quiet` | Suppress normal output and hide the console window on Windows. |
+| `-V, --version` | Print the installed version. |
 
 ## How it works
 

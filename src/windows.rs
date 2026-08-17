@@ -10,11 +10,19 @@ extern "system" {
 pub struct InhibitGuard;
 
 impl InhibitGuard {
-    fn new() -> Self {
+    pub(crate) fn check(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn new() -> Result<Self, String> {
         unsafe {
-            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+            if SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+                == 0
+            {
+                return Err("SetThreadExecutionState failed".into());
+            }
         }
-        InhibitGuard
+        Ok(InhibitGuard)
     }
 }
 
@@ -26,6 +34,6 @@ impl Drop for InhibitGuard {
     }
 }
 
-pub fn start_inhibit() -> InhibitGuard {
+pub fn start_inhibit() -> Result<InhibitGuard, String> {
     InhibitGuard::new()
 }
