@@ -305,16 +305,6 @@ fn main() -> ExitCode {
         .any(|arg| arg == "-q" || arg == "--quiet");
     QUIET.store(quiet_hint, Ordering::Relaxed);
 
-    #[cfg(windows)]
-    {
-        if !quiet_hint {
-            if let Err(error) = init_console() {
-                eprintln!("error: {error}");
-                return ExitCode::from(1);
-            }
-        }
-    }
-
     let options = match parse_args(&args) {
         Ok(options) => options,
         Err(error) => {
@@ -333,6 +323,14 @@ fn main() -> ExitCode {
     if options.show_version {
         version();
         return ExitCode::SUCCESS;
+    }
+
+    #[cfg(windows)]
+    if !options.quiet {
+        if let Err(error) = init_console() {
+            eprintln!("error: {error}");
+            return ExitCode::from(1);
+        }
     }
 
     #[cfg(windows)]
