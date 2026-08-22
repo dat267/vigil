@@ -27,7 +27,6 @@ cargo install --git https://github.com/dat267/vigil
 vigil                        # Stay awake indefinitely (Ctrl+C to stop)
 vigil -t 2h                  # Stay awake for 2 hours, then exit
 vigil --timeout=2h           # Equivalent long-option form
-vigil -t 45m -s              # Stay awake for 45 minutes, then shut down
 ```
 
 **Flags:**
@@ -35,7 +34,6 @@ vigil -t 45m -s              # Stay awake for 45 minutes, then shut down
 | Flag | Description |
 |------|-------------|
 | `-t, --timeout <DURATION>` | Duration to stay awake (e.g. `30s`, `45m`, `2h`, `1h30m`). `--timeout=DURATION` and `-t=DURATION` are also accepted. Omit for indefinite. |
-| `-s, --shutdown` | Shut down the system when the timeout expires. Requires `-t`. On Linux/macOS this usually requires elevated privileges (`sudo`). |
 | `-q, --quiet` | Suppress normal output (fatal errors are still reported) and hide the console window on Windows. |
 | `-V, --version` | Print the installed version. |
 | `-h, --help` | Print help. |
@@ -51,10 +49,8 @@ vigil -t 45m -s              # Stay awake for 45 minutes, then shut down
 ## Limitations
 
 - On Linux the inhibition is held by a child `systemd-inhibit sleep` helper. It is
-  cleaned up on graceful exit (Ctrl+C, SIGTERM, timeout, shutdown). If vigil is
+  cleaned up on graceful exit (Ctrl+C, SIGTERM, timeout). If vigil is
   killed with `SIGKILL`, a harmless `sleep` helper process may remain until logout.
-- `-s` shuts the machine down; on Linux/macOS this usually requires elevated
-  privileges (run vigil with `sudo`).
 
 ## Build
 

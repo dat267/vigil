@@ -1,9 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::io::{IsTerminal, Write};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-use std::process::{Command, ExitCode, Stdio};
+use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -19,25 +17,10 @@ mod platform;
 
 pub(crate) static QUIET: AtomicBool = AtomicBool::new(false);
 
-/// Seconds in the shutdown countdown.
-const COUNTDOWN_SECS: i32 = 60;
-/// Poll interval for the main loop and the shutdown countdown.
+/// Poll interval for the main loop.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-#[cfg(unix)]
-unsafe extern "C" {
-    fn geteuid() -> u32;
-}
-
-/// True when running as root, which is required (or at least expected) for the
-/// -s shutdown feature on Linux and macOS.
-#[cfg(unix)]
-fn is_root() -> bool {
-    unsafe { geteuid() == 0 }
-}
-
-/// Ctrl+C / termination detection used to stop the main loop and to cancel the
-/// shutdown countdown on every platform.
+/// Ctrl+C / termination detection used to stop the main loop on every platform.
 mod sig {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -119,10 +102,6 @@ const CONOUT_W: [u16; 8] = [
     0x0043, 0x004F, 0x004E, 0x004F, 0x0055, 0x0054, 0x0024, 0x0000,
 ];
 
-/// CREATE_NO_WINDOW: suppresses the console window of spawned console apps.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 /// Makes stdout/stderr usable for a windows-subsystem exe (which is launched
 /// without a console): attach to the parent console, or allocate one, then
 /// repoint the invalid standard handles at it.
@@ -192,13 +171,6 @@ macro_rules! outln {
     }};
 }
 
-macro_rules! out {
-    ($($arg:tt)*) => {{
-        let _ = write!(std::io::stdout(), $($arg)*);
-        let _ = std::io::stdout().flush();
-    }};
-}
-
 /// Reports a fatal error on stderr. On Windows this first initializes the
 /// console so the message is visible even in quiet mode, instead of writing to
 /// an invalid standard handle and vanishing.
@@ -212,7 +184,7 @@ fn help() {
     // Keep the flag list and descriptions in sync with README.md.
     outln!(
         "\
-Usage: vigil [-t <duration>] [-s] [-q] [-V] [-h]
+Usage: vigil [-t <duration>] [-q] [-V] [-h]
 
 Keep your system awake.
 
@@ -220,10 +192,8 @@ Flags:
   -t, --timeout <duration>  Stay awake for this long (e.g. 2h, 45m, 30s); \
                              --timeout=<duration> and -t=<duration> are \
                              also accepted. Infinite by default.
-  -s, --shutdown            Shutdown when the timeout expires (requires \
-                              --timeout). May require elevated privileges.
   -q, --quiet               Suppress normal output (errors are still shown); \
-                               hide console window on Windows.
+                             hide console window on Windows.
   -h, --help                Print this help.
   -V, --version             Print the version."
     );
@@ -287,7 +257,6 @@ struct Options {
     show_help: bool,
     show_version: bool,
     timeout: Option<Duration>,
-    shutdown: bool,
 }
 
 /// Parses and stores a timeout value, translating parse errors into CLI errors.
@@ -306,7 +275,6 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
             "-q" | "--quiet" => options.quiet = true,
             "-h" | "--help" | "help" => options.show_help = true,
             "-V" | "--version" => options.show_version = true,
-            "-s" | "--shutdown" => options.shutdown = true,
             "-t" | "--timeout" => {
                 i += 1;
                 if i >= args.len() || args[i].starts_with('-') {
@@ -324,117 +292,7 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
         }
         i += 1;
     }
-    if options.shutdown && options.timeout.is_none() {
-        return Err("error: --shutdown requires --timeout".into());
-    }
     Ok(options)
-}
-
-/// Issues the platform shutdown command. Returns whether it was accepted.
-#[cfg(target_os = "windows")]
-fn run_shutdown() -> std::io::Result<bool> {
-    let mut command = Command::new("shutdown");
-    command.args(["/s", "/t", "0"]);
-    if QUIET.load(Ordering::Relaxed) {
-        command.stdout(Stdio::null()).stderr(Stdio::null());
-    }
-    // Never let shutdown.exe flash its own console window.
-    command.creation_flags(CREATE_NO_WINDOW);
-    match command.status() {
-        Ok(s) => Ok(s.success()),
-        Err(_) => Ok(false),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn run_shutdown() -> std::io::Result<bool> {
-    // Root: classic shutdown. Non-root: prefer polkit-aware systemctl, then
-    // fall back to the plain shutdown command (e.g. on non-systemd distros).
-    let candidates: &[&[&str]] = if is_root() {
-        &[&["shutdown", "-h", "now"]]
-    } else {
-        &[&["systemctl", "poweroff"], &["shutdown", "-h", "now"]]
-    };
-    for candidate in candidates {
-        let mut command = Command::new(candidate[0]);
-        command.args(&candidate[1..]);
-        if QUIET.load(Ordering::Relaxed) {
-            command.stdout(Stdio::null()).stderr(Stdio::null());
-        }
-        match command.status() {
-            Ok(s) if s.success() => return Ok(true),
-            _ => continue,
-        }
-    }
-    Ok(false)
-}
-
-#[cfg(target_os = "macos")]
-fn run_shutdown() -> std::io::Result<bool> {
-    let mut command = Command::new("shutdown");
-    command.args(["-h", "now"]);
-    if QUIET.load(Ordering::Relaxed) {
-        command.stdout(Stdio::null()).stderr(Stdio::null());
-    }
-    match command.status() {
-        Ok(s) => Ok(s.success()),
-        Err(_) => Ok(false),
-    }
-}
-
-/// Runs the 60-second shutdown countdown, then issues the shutdown command.
-/// Returns true if the flow completed or was cancelled by the user, false if
-/// the shutdown command failed to execute.
-fn trigger_shutdown() -> bool {
-    if !QUIET.load(Ordering::Relaxed) {
-        outln!("\nShutting down in 60 seconds. Press Ctrl+C to cancel.");
-    }
-    #[cfg(unix)]
-    if !QUIET.load(Ordering::Relaxed) && !is_root() {
-        outln!(
-            "warning: shutting down usually requires elevated privileges; \
-             if it fails, rerun vigil with sudo"
-        );
-    }
-    let tty = std::io::stdout().is_terminal();
-    for i in (1..=COUNTDOWN_SECS).rev() {
-        if sig::check() {
-            if !QUIET.load(Ordering::Relaxed) {
-                outln!("\nShutdown cancelled.");
-            }
-            return true;
-        }
-        if tty && !QUIET.load(Ordering::Relaxed) {
-            out!("\rShutting down in {i}s... ");
-        } else if !tty
-            && !QUIET.load(Ordering::Relaxed)
-            && (i == COUNTDOWN_SECS || i <= 5 || i % 10 == 0)
-        {
-            outln!("Shutting down in {i}s...");
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-    if sig::check() {
-        if !QUIET.load(Ordering::Relaxed) {
-            outln!("\nShutdown cancelled.");
-        }
-        return true;
-    }
-    if !QUIET.load(Ordering::Relaxed) {
-        outln!("\nShutting down...");
-    }
-    match run_shutdown() {
-        Ok(true) => true,
-        Ok(false) | Err(_) => {
-            if !QUIET.load(Ordering::Relaxed) {
-                outln!(
-                    "warning: shutdown command failed; your user may lack shutdown \
-                     privileges. The system will stay awake (try running vigil with sudo)."
-                );
-            }
-            false
-        }
-    }
 }
 
 fn main() -> ExitCode {
@@ -517,14 +375,6 @@ fn main() -> ExitCode {
             if start.elapsed() >= dur {
                 if tty && !options.quiet {
                     outln!("\rTimeout reached.        ");
-                }
-                if options.shutdown {
-                    let shutdown_ok = trigger_shutdown();
-                    drop(guard);
-                    if !shutdown_ok {
-                        return ExitCode::from(1);
-                    }
-                    break;
                 }
                 drop(guard);
                 break;
@@ -649,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_parse_rejects_missing_timeout_value() {
-        let args = vec!["vigil".into(), "--timeout".into(), "--shutdown".into()];
+        let args = vec!["vigil".into(), "--timeout".into(), "--quiet".into()];
         assert!(parse_args(&args).is_err());
     }
 
