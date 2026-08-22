@@ -61,6 +61,9 @@ impl InhibitGuard {
 impl Drop for InhibitGuard {
     fn drop(&mut self) {
         if let Some(ref mut c) = self.0 {
+            // The child is its own process-group leader (process_group(0)), so
+            // killing the group also reaps the sleep grandchild that
+            // systemd-inhibit spawns, leaving nothing behind.
             let process_group = -(c.id() as i32);
             unsafe {
                 kill(process_group, SIGKILL);

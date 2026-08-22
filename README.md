@@ -34,10 +34,11 @@ vigil -t 45m -s              # Stay awake for 45 minutes, then shut down
 
 | Flag | Description |
 |------|-------------|
-| `-t, --timeout <DURATION>` | Duration to stay awake (e.g. `30s`, `45m`, `2h`, `1h30m`). `--timeout=DURATION` is also accepted. Omit for indefinite. |
-| `-s, --shutdown` | Shut down the system when the timeout expires. Requires `-t`. |
-| `-q, --quiet` | Suppress normal output and hide the console window on Windows. |
+| `-t, --timeout <DURATION>` | Duration to stay awake (e.g. `30s`, `45m`, `2h`, `1h30m`). `--timeout=DURATION` and `-t=DURATION` are also accepted. Omit for indefinite. |
+| `-s, --shutdown` | Shut down the system when the timeout expires. Requires `-t`. On Linux/macOS this usually requires elevated privileges (`sudo`). |
+| `-q, --quiet` | Suppress normal output (fatal errors are still reported) and hide the console window on Windows. |
 | `-V, --version` | Print the installed version. |
+| `-h, --help` | Print help. |
 
 ## How it works
 
@@ -46,6 +47,14 @@ vigil -t 45m -s              # Stay awake for 45 minutes, then shut down
 | Linux    | `systemd-inhibit --what=idle:sleep` via logind |
 | macOS    | `caffeinate -d -i -w <pid>` (exits automatically when vigil exits) |
 | Windows  | `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED \| ES_DISPLAY_REQUIRED)` |
+
+## Limitations
+
+- On Linux the inhibition is held by a child `systemd-inhibit sleep` helper. It is
+  cleaned up on graceful exit (Ctrl+C, SIGTERM, timeout, shutdown). If vigil is
+  killed with `SIGKILL`, a harmless `sleep` helper process may remain until logout.
+- `-s` shuts the machine down; on Linux/macOS this usually requires elevated
+  privileges (run vigil with `sudo`).
 
 ## Build
 
