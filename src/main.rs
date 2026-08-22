@@ -1,6 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Command, ExitCode, Stdio};
@@ -131,8 +131,8 @@ Keep your system awake.
 
 Flags:
   -t, --timeout <duration>  Stay awake for this long (e.g. 2h, 45m, 30s); \
-                             --timeout=<duration> is also accepted. \
-                               Infinite by default.
+                             --timeout=<duration> and -t=<duration> are \
+                             also accepted. Infinite by default.
   -s, --shutdown            Shutdown when the timeout expires (requires \
                               --timeout).
   -q, --quiet               Suppress all output; hide console window on \
@@ -230,6 +230,12 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
                     parse_duration(value).map_err(|e| format!("error: invalid timeout: {e}"))?,
                 );
             }
+            _ if arg.starts_with("-t=") => {
+                let value = &arg[3..];
+                options.timeout = Some(
+                    parse_duration(value).map_err(|e| format!("error: invalid timeout: {e}"))?,
+                );
+            }
             _ => return Err(format!("error: unknown argument '{arg}'")),
         }
         i += 1;
@@ -240,6 +246,9 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
+/// Runs the 60-second shutdown countdown, then issues the shutdown command.
+/// Returns `true` if the flow completed or was cancelled by the user,
+/// `false` if the shutdown command failed to execute.
 fn trigger_shutdown() -> bool {
     if !QUIET.load(Ordering::Relaxed) {
         println!("\nShutting down in 60 seconds. Press Ctrl+C to cancel.");
@@ -254,7 +263,6 @@ fn trigger_shutdown() -> bool {
             return true;
         }
         if tty && !QUIET.load(Ordering::Relaxed) {
-            use std::io::Write;
             print!("\rShutting down in {i}s... ");
             std::io::stdout().flush().ok();
         } else if !tty && !QUIET.load(Ordering::Relaxed) && (i == 60 || i <= 5 || i % 10 == 0) {
@@ -303,13 +311,27 @@ fn main() -> ExitCode {
         .iter()
         .skip(1)
         .any(|arg| arg == "-q" || arg == "--quiet");
+    #[cfg(windows)]
+    let wants_console = !quiet_hint
+        || args
+            .iter()
+            .skip(1)
+            .any(|arg| matches!(arg.as_str(), "-h" | "--help" | "help" | "-V" | "--version"));
     QUIET.store(quiet_hint, Ordering::Relaxed);
+
+    #[cfg(windows)]
+    if wants_console {
+        if let Err(error) = init_console() {
+            let _ = writeln!(std::io::stderr(), "error: {error}");
+            return ExitCode::from(1);
+        }
+    }
 
     let options = match parse_args(&args) {
         Ok(options) => options,
         Err(error) => {
             if !quiet_hint {
-                eprintln!("{error}");
+                let _ = writeln!(std::io::stderr(), "{error}");
             }
             return ExitCode::from(1);
         }
@@ -323,14 +345,6 @@ fn main() -> ExitCode {
     if options.show_version {
         version();
         return ExitCode::SUCCESS;
-    }
-
-    #[cfg(windows)]
-    if !options.quiet {
-        if let Err(error) = init_console() {
-            eprintln!("error: {error}");
-            return ExitCode::from(1);
-        }
     }
 
     #[cfg(windows)]
@@ -379,9 +393,9 @@ fn main() -> ExitCode {
                     println!("\rTimeout reached.        ");
                 }
                 if options.shutdown {
-                    let shutdown_succeeded = trigger_shutdown();
+                    let shutdown_ok = trigger_shutdown();
                     drop(_guard);
-                    if !shutdown_succeeded {
+                    if !shutdown_ok {
                         return ExitCode::from(1);
                     }
                     break;
@@ -467,6 +481,13 @@ mod tests {
         let args = vec!["vigil".into(), "--timeout=2h".into()];
         let options = parse_args(&args).unwrap();
         assert_eq!(options.timeout.unwrap().as_secs(), 7200);
+    }
+
+    #[test]
+    fn test_parse_short_timeout_equals_form() {
+        let args = vec!["vigil".into(), "-t=30m".into()];
+        let options = parse_args(&args).unwrap();
+        assert_eq!(options.timeout.unwrap().as_secs(), 1800);
     }
 
     #[test]
