@@ -22,7 +22,10 @@ impl InhibitGuard {
             .ok_or_else(|| "sleep inhibitor is not running".to_string())?;
         match child.try_wait() {
             Ok(None) => Ok(()),
-            Ok(Some(status)) => Err(format!("systemd-inhibit exited ({status})")),
+            Ok(Some(status)) => {
+                self.0 = None;
+                Err(format!("systemd-inhibit exited ({status})"))
+            }
             Err(error) => Err(format!("could not check systemd-inhibit: {error}")),
         }
     }
@@ -64,9 +67,12 @@ impl Drop for InhibitGuard {
             // The child is its own process-group leader (process_group(0)), so
             // killing the group also reaps the sleep grandchild that
             // systemd-inhibit spawns, leaving nothing behind.
-            let process_group = -(c.id() as i32);
-            unsafe {
-                kill(process_group, SIGKILL);
+            let pid = c.id();
+            if pid > 0 && pid <= i32::MAX as u32 {
+                let process_group = -(pid as i32);
+                unsafe {
+                    kill(process_group, SIGKILL);
+                }
             }
             let _ = c.wait();
         }

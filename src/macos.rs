@@ -11,7 +11,10 @@ impl InhibitGuard {
             .ok_or_else(|| "sleep inhibitor is not running".to_string())?;
         match child.try_wait() {
             Ok(None) => Ok(()),
-            Ok(Some(status)) => Err(format!("caffeinate exited ({status})")),
+            Ok(Some(status)) => {
+                self.0 = None;
+                Err(format!("caffeinate exited ({status})"))
+            }
             Err(error) => Err(format!("could not check caffeinate: {error}")),
         }
     }
@@ -40,4 +43,17 @@ pub fn start_inhibit() -> io::Result<InhibitGuard> {
     InhibitGuard::new().map_err(|error| {
         io::Error::new(error.kind(), format!("failed to start caffeinate: {error}"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_an_exited_inhibitor() {
+        let child = Command::new("true").spawn().unwrap();
+        let mut guard = InhibitGuard(Some(child));
+        guard.0.as_mut().unwrap().wait().unwrap();
+        assert!(guard.check().is_err());
+    }
 }
