@@ -17,6 +17,10 @@ impl InhibitGuard {
     }
 
     fn new() -> io::Result<Self> {
+        // SAFETY: SetThreadExecutionState is a documented Windows API
+        // (kernel32). The flag combination ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+        // | ES_DISPLAY_REQUIRED is the standard way to prevent system sleep
+        // and display sleep. A return value of 0 indicates failure.
         unsafe {
             if SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
                 == 0
@@ -30,6 +34,9 @@ impl InhibitGuard {
 
 impl Drop for InhibitGuard {
     fn drop(&mut self) {
+        // SAFETY: Restoring to ES_CONTINUOUS alone clears the previous
+        // execution state flags, allowing the system to sleep again. This
+        // is the documented way to release the inhibition.
         unsafe {
             SetThreadExecutionState(ES_CONTINUOUS);
         }

@@ -2,6 +2,12 @@
 name = "vigil"
 version = "0.0.1"
 edition = "2021"
+description = "Keep your system awake — cross-platform sleep inhibitor"
+license = "MIT"
+repository = "https://github.com/dat267/vigil"
+homepage = "https://github.com/dat267/vigil"
+keywords = ["sleep", "inhibit", "caffeinate", "keep-awake"]
+categories = ["command-line-utilities"]
 
 [profile.release]
 opt-level = "z"

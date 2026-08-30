@@ -37,9 +37,15 @@ mod sig {
 
     #[cfg(unix)]
     pub fn install() -> Result<(), String> {
+        // SAFETY: The handler only performs an atomic store, which is
+        // async-signal-safe on all POSIX platforms. The function pointer
+        // is passed to signal() which invokes it with the signal number.
         unsafe extern "C" fn handler(_: i32) {
             record();
         }
+        // SAFETY: signal() is a standard POSIX C function. The handler
+        // pointer is a valid function pointer cast to usize, matching the
+        // C signature of signal().
         unsafe extern "C" {
             fn signal(signum: i32, handler: usize) -> usize;
         }
@@ -47,7 +53,12 @@ mod sig {
         const SIGTERM: i32 = 15;
         let handler = handler as *const () as usize;
         for signum in [SIGINT, SIGTERM] {
-            if unsafe { signal(signum, handler) } == usize::MAX {
+            // SAFETY: handler is a valid function pointer obtained from an
+        // unsafe extern "C" fn, and signum is a valid POSIX signal number.
+        // signal() is safe to call from this context; the only race is that
+        // the handler may temporarily be SIG_DFL on some implementations,
+        // which is benign for our use case.
+        if unsafe { signal(signum, handler) } == usize::MAX {
                 return Err(format!(
                     "could not install signal handler for signal {signum}"
                 ));
@@ -58,16 +69,24 @@ mod sig {
 
     #[cfg(windows)]
     pub fn install() -> Result<(), String> {
+        // SAFETY: This handler is called by the OS console control handler
+        // mechanism. It only performs an atomic store, which is safe in any
+        // context. The function signature matches the required
+        // PHANDLER_ROUTINE callback type.
         unsafe extern "system" fn handler(_: u32) -> i32 {
             record();
             1
         }
+        // SAFETY: SetConsoleCtrlHandler is a documented Windows API. The
+        // function pointer type matches the PHANDLER_ROUTINE signature.
         extern "system" {
             fn SetConsoleCtrlHandler(
                 handler: Option<unsafe extern "system" fn(u32) -> i32>,
                 add: i32,
             ) -> i32;
         }
+        // SAFETY: handler is a valid function pointer matching the
+        // PHANDLER_ROUTINE signature. add=1 means install the handler.
         let installed = unsafe { SetConsoleCtrlHandler(Some(handler), 1) };
         if installed == 0 {
             Err("SetConsoleCtrlHandler failed".into())
@@ -77,7 +96,8 @@ mod sig {
     }
 }
 
-// Windows console API, declared once at module scope.
+// SAFETY: These are well-documented Windows API functions (kernel32). The
+// function signatures are correct for the declared ABI.
 #[cfg(windows)]
 extern "system" {
     fn AttachConsole(dwProcessId: u32) -> i32;
@@ -119,10 +139,14 @@ fn init_console() -> Result<(), String> {
     const INVALID_HANDLE_VALUE: isize = -1;
 
     let output_was_valid = {
+        // SAFETY: GetStdHandle is a documented Windows API. The constants
+        // STD_OUTPUT_HANDLE and STD_ERROR_HANDLE are correct. The function
+        // returns a pseudo-handle that does not need closing.
         let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
         handle != NULL_HANDLE && handle != INVALID_HANDLE_VALUE
     };
     let error_was_valid = {
+        // SAFETY: Same as above, for the standard error handle.
         let handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
         handle != NULL_HANDLE && handle != INVALID_HANDLE_VALUE
     };
@@ -131,12 +155,22 @@ fn init_console() -> Result<(), String> {
         return Ok(());
     }
 
+    // SAFETY: AttachConsole is a documented Windows API. The
+    // ATTACH_PARENT_PROCESS constant (0xFFFFFFFF) is the correct value to
+    // attach to the parent process's console.
     if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } == 0 {
         // Allocation may fail when a console is already attached but its
         // inherited standard handles are invalid. CONOUT$ below repairs that case.
+        // SAFETY: AllocConsole allocates a new console if none is attached.
+        // Failure is expected when a console is already present, so the
+        // return value is intentionally discarded.
         let _ = unsafe { AllocConsole() };
     }
 
+    // SAFETY: CreateFileW is a documented Windows API. CONOUT_W is a valid
+    // null-terminated UTF-16 string. The access and sharing flags are
+    // correct for opening the console output device. The returned handle
+    // does not need explicit closing (it is a console handle).
     let con_out: isize = unsafe {
         CreateFileW(
             CONOUT_W.as_ptr(),
@@ -154,9 +188,13 @@ fn init_console() -> Result<(), String> {
             std::io::Error::last_os_error()
         ));
     }
+    // SAFETY: SetStdHandle is a documented Windows API. con_out is a valid
+    // handle returned by CreateFileW. The standard handle constants are
+    // correct. Only replaced if the original handle was invalid.
     if !output_was_valid && unsafe { SetStdHandle(STD_OUTPUT_HANDLE, con_out) } == 0 {
         return Err("could not initialize console stdout".into());
     }
+    // SAFETY: Same as above, for the standard error handle.
     if !error_was_valid && unsafe { SetStdHandle(STD_ERROR_HANDLE, con_out) } == 0 {
         return Err("could not initialize console stderr".into());
     }

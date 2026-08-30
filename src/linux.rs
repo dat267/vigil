@@ -2,6 +2,9 @@ use std::io;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 
+// SAFETY: These are standard POSIX C functions. kill() and getppid() are
+// specified by POSIX.1-2001. prctl() is a Linux-specific syscall wrapper.
+// All function signatures match the C declarations.
 unsafe extern "C" {
     fn kill(pid: i32, signal: i32) -> i32;
     fn prctl(option: i32, ...) -> i32;
@@ -40,6 +43,11 @@ impl InhibitGuard {
             "2147483647",
         ]);
         command.process_group(0);
+        // SAFETY: This closure runs in the child process after fork().
+        // getppid() and prctl() are async-signal-safe POSIX/Linux functions
+        // suitable for use after fork(). The parent PID is captured before
+        // prctl and verified after to detect if the parent exited before
+        // prctl took effect (an edge-case race).
         unsafe {
             command.pre_exec(|| {
                 let parent_pid = getppid();
@@ -70,6 +78,11 @@ impl Drop for InhibitGuard {
             let pid = c.id();
             if pid > 0 && pid <= i32::MAX as u32 {
                 let process_group = -(pid as i32);
+                // SAFETY: kill() is a POSIX function. The pid is a negative
+                // process group ID (negated child PID), which kills the
+                // entire process group including the systemd-inhibit child
+                // and its sleep grandchild. The PID is validated to be in
+                // range for i32 and positive before negation.
                 unsafe {
                     kill(process_group, SIGKILL);
                 }
