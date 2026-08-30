@@ -54,11 +54,11 @@ mod sig {
         let handler = handler as *const () as usize;
         for signum in [SIGINT, SIGTERM] {
             // SAFETY: handler is a valid function pointer obtained from an
-        // unsafe extern "C" fn, and signum is a valid POSIX signal number.
-        // signal() is safe to call from this context; the only race is that
-        // the handler may temporarily be SIG_DFL on some implementations,
-        // which is benign for our use case.
-        if unsafe { signal(signum, handler) } == usize::MAX {
+            // unsafe extern "C" fn, and signum is a valid POSIX signal number.
+            // signal() is safe to call from this context; the only race is that
+            // the handler may temporarily be SIG_DFL on some implementations,
+            // which is benign for our use case.
+            if unsafe { signal(signum, handler) } == usize::MAX {
                 return Err(format!(
                     "could not install signal handler for signal {signum}"
                 ));
