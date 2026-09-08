@@ -2,11 +2,8 @@ use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "linux")]
-#[path = "linux.rs"]
-mod platform;
-#[cfg(target_os = "macos")]
-#[path = "macos.rs"]
+#[cfg(unix)]
+#[path = "unix.rs"]
 mod platform;
 #[cfg(target_os = "windows")]
 #[path = "windows.rs"]
