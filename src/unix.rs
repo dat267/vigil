@@ -27,6 +27,8 @@ pub(crate) struct Options {
     /// whole group (reaping grandchildren).
     pub(crate) process_group: bool,
     /// Linux only: ask the kernel to signal the child if vigil dies.
+    /// The field exists only where its reader exists (the prctl block).
+    #[cfg(target_os = "linux")]
     pub(crate) pdeathsig: bool,
 }
 
