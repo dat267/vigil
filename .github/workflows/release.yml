@@ -23,6 +23,12 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy -- -D warnings
       - run: cargo test
+      # macOS is build-only in the matrix (no test job), so its cfg surface
+      # must be type-checked here, before the expensive build stage. Local dev
+      # machines only compile the Linux cfg — exactly how POSIX items got
+      # Linux-gated and broke the macOS build.
+      - run: rustup target add aarch64-apple-darwin
+      - run: cargo clippy --target aarch64-apple-darwin -- -D warnings
 
   test-windows:
     runs-on: windows-latest
