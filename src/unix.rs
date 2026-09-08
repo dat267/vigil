@@ -186,4 +186,55 @@ mod tests {
         let alive = unsafe { kill(pid, 0) } == 0;
         assert!(!alive, "dropped guard must have killed the inhibitor");
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn group_kill_reaps_the_inhibitors_grandchild() {
+        // The Linux production config: the inhibitor is its own process-group
+        // leader, so Drop must kill the whole group — including any sleep
+        // grandchild the inhibitor spawned — not just the direct child.
+        let pid_file =
+            std::env::temp_dir().join(format!("vigil-grandchild-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pid_file);
+        let script = format!("sleep 30 & echo $! > '{}'; wait", pid_file.display());
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(&script);
+        let guard = ProcessGuard::spawn(
+            &mut command,
+            Options {
+                process_group: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Wait for the shell to report the grandchild PID.
+        let mut grandchild: Option<i32> = None;
+        for _ in 0..200 {
+            if let Ok(text) = std::fs::read_to_string(&pid_file) {
+                if let Ok(pid) = text.trim().parse::<i32>() {
+                    grandchild = Some(pid);
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let grandchild = grandchild.expect("shell never reported the grandchild PID");
+
+        drop(guard);
+
+        // SIGKILL delivery and init's reap of the reparented grandchild are
+        // asynchronous; poll for the reap instead of probing once.
+        let mut reaped = false;
+        for _ in 0..200 {
+            // SAFETY: kill(pid, 0) probes for existence; no signal is sent.
+            if unsafe { kill(grandchild, 0) } != 0 {
+                reaped = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(reaped, "dropped guard must have reaped the grandchild too");
+        let _ = std::fs::remove_file(&pid_file);
+    }
 }
