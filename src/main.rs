@@ -1,8 +1,5 @@
-#![cfg_attr(windows, windows_subsystem = "windows")]
-
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
@@ -14,8 +11,6 @@ mod platform;
 #[cfg(target_os = "windows")]
 #[path = "windows.rs"]
 mod platform;
-
-pub(crate) static QUIET: AtomicBool = AtomicBool::new(false);
 
 /// Poll interval for the main loop.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -96,111 +91,6 @@ mod sig {
     }
 }
 
-// SAFETY: These are well-documented Windows API functions (kernel32). The
-// function signatures are correct for the declared ABI.
-#[cfg(windows)]
-extern "system" {
-    fn AttachConsole(dwProcessId: u32) -> i32;
-    fn AllocConsole() -> i32;
-    fn CreateFileW(
-        lpFileName: *const u16,
-        dwDesiredAccess: u32,
-        dwShareMode: u32,
-        lpSecurityAttributes: *mut std::ffi::c_void,
-        dwCreationDisposition: u32,
-        dwFlagsAndAttributes: u32,
-        hTemplateFile: isize,
-    ) -> isize;
-    fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
-    fn GetStdHandle(nStdHandle: u32) -> isize;
-}
-
-/// UTF-16 null-terminated "CONOUT$", the console attached for output. Held as a
-/// static so no heap allocation is needed before the standard handles work.
-#[cfg(windows)]
-const CONOUT_W: [u16; 8] = [
-    0x0043, 0x004F, 0x004E, 0x004F, 0x0055, 0x0054, 0x0024, 0x0000,
-];
-
-/// Makes stdout/stderr usable for a windows-subsystem exe (which is launched
-/// without a console): attach to the parent console, or allocate one, then
-/// repoint the invalid standard handles at it.
-#[cfg(windows)]
-fn init_console() -> Result<(), String> {
-    const ATTACH_PARENT_PROCESS: u32 = 0xFFFF_FFFF;
-    const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5;
-    const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4;
-    const NULL_HANDLE: isize = 0;
-    const GENERIC_READ: u32 = 0x8000_0000;
-    const GENERIC_WRITE: u32 = 0x4000_0000;
-    const FILE_SHARE_READ: u32 = 1;
-    const FILE_SHARE_WRITE: u32 = 2;
-    const OPEN_EXISTING: u32 = 3;
-    const INVALID_HANDLE_VALUE: isize = -1;
-
-    let output_was_valid = {
-        // SAFETY: GetStdHandle is a documented Windows API. The constants
-        // STD_OUTPUT_HANDLE and STD_ERROR_HANDLE are correct. The function
-        // returns a pseudo-handle that does not need closing.
-        let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-        handle != NULL_HANDLE && handle != INVALID_HANDLE_VALUE
-    };
-    let error_was_valid = {
-        // SAFETY: Same as above, for the standard error handle.
-        let handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
-        handle != NULL_HANDLE && handle != INVALID_HANDLE_VALUE
-    };
-
-    if output_was_valid && error_was_valid {
-        return Ok(());
-    }
-
-    // SAFETY: AttachConsole is a documented Windows API. The
-    // ATTACH_PARENT_PROCESS constant (0xFFFFFFFF) is the correct value to
-    // attach to the parent process's console.
-    if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } == 0 {
-        // Allocation may fail when a console is already attached but its
-        // inherited standard handles are invalid. CONOUT$ below repairs that case.
-        // SAFETY: AllocConsole allocates a new console if none is attached.
-        // Failure is expected when a console is already present, so the
-        // return value is intentionally discarded.
-        let _ = unsafe { AllocConsole() };
-    }
-
-    // SAFETY: CreateFileW is a documented Windows API. CONOUT_W is a valid
-    // null-terminated UTF-16 string. The access and sharing flags are
-    // correct for opening the console output device. The returned handle
-    // does not need explicit closing (it is a console handle).
-    let con_out: isize = unsafe {
-        CreateFileW(
-            CONOUT_W.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            std::ptr::null_mut(),
-            OPEN_EXISTING,
-            0,
-            0,
-        )
-    };
-    if con_out == NULL_HANDLE || con_out == INVALID_HANDLE_VALUE {
-        return Err(format!(
-            "could not open console output: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // SAFETY: SetStdHandle is a documented Windows API. con_out is a valid
-    // handle returned by CreateFileW. The standard handle constants are
-    // correct. Only replaced if the original handle was invalid.
-    if !output_was_valid && unsafe { SetStdHandle(STD_OUTPUT_HANDLE, con_out) } == 0 {
-        return Err("could not initialize console stdout".into());
-    }
-    // SAFETY: Same as above, for the standard error handle.
-    if !error_was_valid && unsafe { SetStdHandle(STD_ERROR_HANDLE, con_out) } == 0 {
-        return Err("could not initialize console stderr".into());
-    }
-    Ok(())
-}
-
 /// Non-panicking stdout output: broken pipes are ignored instead of aborting
 /// the process (the release profile uses panic = "abort").
 macro_rules! outln {
@@ -209,12 +99,8 @@ macro_rules! outln {
     }};
 }
 
-/// Reports a fatal error on stderr. On Windows this first initializes the
-/// console so the message is visible even in quiet mode, instead of writing to
-/// an invalid standard handle and vanishing.
+/// Reports a fatal error on stderr.
 fn report_error(message: &str) {
-    #[cfg(windows)]
-    let _ = init_console();
     let _ = writeln!(std::io::stderr(), "{message}");
 }
 
@@ -222,7 +108,7 @@ fn help() {
     // Keep the flag list and descriptions in sync with README.md.
     outln!(
         "\
-Usage: vigil [-t <duration>] [-q] [-V] [-h]
+Usage: vigil [-t <duration>] [-V] [-h]
 
 Keep your system awake.
 
@@ -230,8 +116,6 @@ Flags:
   -t, --timeout <duration>  Stay awake for this long (e.g. 2h, 45m, 30s); \
                              --timeout=<duration> and -t=<duration> are \
                              also accepted. Infinite by default.
-  -q, --quiet               Suppress normal output (errors are still shown); \
-                             hide console window on Windows.
   -h, --help                Print this help.
   -V, --version             Print the version."
     );
@@ -291,7 +175,6 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 
 #[derive(Default)]
 struct Options {
-    quiet: bool,
     show_help: bool,
     show_version: bool,
     timeout: Option<Duration>,
@@ -310,7 +193,6 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
     while i < args.len() {
         let arg = args[i].as_str();
         match arg {
-            "-q" | "--quiet" => options.quiet = true,
             "-h" | "--help" | "help" => options.show_help = true,
             "-V" | "--version" => options.show_version = true,
             "-t" | "--timeout" => {
@@ -337,27 +219,6 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args_os()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    let quiet_hint = args
-        .iter()
-        .skip(1)
-        .any(|arg| arg == "-q" || arg == "--quiet");
-    // A windows-subsystem exe is launched without a console; decide up front
-    // whether output is needed (help/version/parse errors) so it is visible.
-    #[cfg(windows)]
-    let wants_console = !quiet_hint
-        || args
-            .iter()
-            .skip(1)
-            .any(|arg| matches!(arg.as_str(), "-h" | "--help" | "help" | "-V" | "--version"));
-    QUIET.store(quiet_hint, Ordering::Relaxed);
-
-    #[cfg(windows)]
-    if wants_console {
-        if let Err(error) = init_console() {
-            report_error(&format!("error: {error}"));
-            return ExitCode::from(1);
-        }
-    }
 
     let options = match parse_args(&args) {
         Ok(options) => options,
@@ -366,7 +227,6 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    QUIET.store(options.quiet, Ordering::Relaxed);
 
     if options.show_help {
         help();
@@ -392,13 +252,13 @@ fn main() -> ExitCode {
     let start = Instant::now();
     let tty = std::io::stdout().is_terminal();
 
-    if tty && !options.quiet {
+    if tty {
         outln!("Vigil started. Press Ctrl+C to stop.");
     }
 
     loop {
         if sig::check() {
-            if tty && !options.quiet {
+            if tty {
                 outln!("\rStopped.              ");
             }
             break;
@@ -411,7 +271,7 @@ fn main() -> ExitCode {
 
         if let Some(dur) = options.timeout {
             if start.elapsed() >= dur {
-                if tty && !options.quiet {
+                if tty {
                     outln!("\rTimeout reached.        ");
                 }
                 drop(guard);
@@ -537,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_parse_rejects_missing_timeout_value() {
-        let args = vec!["vigil".into(), "--timeout".into(), "--quiet".into()];
+        let args = vec!["vigil".into(), "--timeout".into(), "--version".into()];
         assert!(parse_args(&args).is_err());
     }
 

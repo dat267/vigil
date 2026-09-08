@@ -34,7 +34,6 @@ vigil --timeout=2h           # Equivalent long-option form
 | Flag | Description |
 |------|-------------|
 | `-t, --timeout <DURATION>` | Duration to stay awake (e.g. `30s`, `45m`, `2h`, `1h30m`). `--timeout=DURATION` and `-t=DURATION` are also accepted. Omit for indefinite. |
-| `-q, --quiet` | Suppress normal output (fatal errors are still reported) and hide the console window on Windows. |
 | `-V, --version` | Print the installed version. |
 | `-h, --help` | Print help. |
 
