@@ -1,19 +1,22 @@
 use std::io;
-#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 
-#[cfg(target_os = "linux")]
+// kill() is POSIX (Linux and macOS); prctl()/getppid() are only used by the
+// Linux parent-death linkage.
 unsafe extern "C" {
     fn kill(pid: i32, signal: i32) -> i32;
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
     fn prctl(option: i32, ...) -> i32;
     fn getppid() -> i32;
 }
 
+const SIGKILL: i32 = 9;
 #[cfg(target_os = "linux")]
 const PR_SET_PDEATHSIG: i32 = 1;
-#[cfg(target_os = "linux")]
-const SIGKILL: i32 = 9;
 #[cfg(target_os = "linux")]
 const SIGTERM: i32 = 15;
 
