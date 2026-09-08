@@ -166,15 +166,18 @@ mod tests {
     fn detects_an_exited_inhibitor() {
         let mut command = Command::new("true");
         let mut guard = ProcessGuard::spawn(&mut command, Options::default()).unwrap();
-        assert!(guard.check().is_ok());
-        // `true` exits immediately; wait for the exit to become visible.
-        loop {
+        // `true` exits immediately; the exit may already be visible on the
+        // first check, so poll (bounded) until it is reported.
+        for _ in 0..500 {
             match guard.check() {
                 Ok(()) => std::thread::sleep(std::time::Duration::from_millis(10)),
-                Err(_) => break,
+                Err(_) => {
+                    assert!(guard.check().is_err(), "must stay reported");
+                    return;
+                }
             }
         }
-        assert!(guard.check().is_err(), "exited inhibitor must be reported");
+        panic!("exited inhibitor was never reported");
     }
 
     #[cfg(target_os = "linux")]
