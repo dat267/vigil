@@ -65,7 +65,7 @@ impl ProcessGuard {
         Ok(ProcessGuard { child: Some(child) })
     }
 
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) fn id(&self) -> u32 {
         self.child.as_ref().expect("guard child").id()
     }
@@ -163,7 +163,6 @@ mod tests {
         panic!("exited inhibitor was never reported");
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn drop_kills_a_running_inhibitor() {
         let mut command = Command::new("sleep");
@@ -176,7 +175,6 @@ mod tests {
         assert!(!alive, "dropped guard must have killed the inhibitor");
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn group_kill_reaps_the_inhibitors_grandchild() {
         // The Linux production config: the inhibitor is its own process-group

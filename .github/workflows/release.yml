@@ -40,8 +40,19 @@ jobs:
       - run: cargo test
       - run: cargo run --quiet -- --version
 
+  # The guard tests only need POSIX tools, so macOS runs the real
+  # spawn/kill/reap path instead of only type-checking it.
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - run: cargo test
+
   build:
-    needs: [test, test-windows]
+    needs: [test, test-windows, test-macos]
     strategy:
       fail-fast: false
       matrix:
