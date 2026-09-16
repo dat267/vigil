@@ -20,57 +20,49 @@ const PR_SET_PDEATHSIG: i32 = 1;
 #[cfg(target_os = "linux")]
 const SIGTERM: i32 = 15;
 
-/// Knobs for the child-process lifecycle; the only platform delta.
-#[derive(Default)]
-pub(crate) struct Options {
-    /// Make the child its own process-group leader so Drop can kill the
-    /// whole group (reaping grandchildren).
-    pub(crate) process_group: bool,
-    /// Linux only: ask the kernel to signal the child if vigil dies.
-    /// The field exists only where its reader exists (the prctl block).
-    #[cfg(target_os = "linux")]
-    pub(crate) pdeathsig: bool,
+/// Ask the kernel to signal the child if vigil dies. Linux implements this via
+/// PR_SET_PDEATHSIG; elsewhere it is a no-op. The uniform signature keeps the
+/// call site cfg-free and the platform delta in one auditable place.
+#[cfg(target_os = "linux")]
+fn apply_parent_death_signal(command: &mut Command) {
+    // SAFETY: This closure runs in the child process after fork(). getppid()
+    // and prctl() are async-signal-safe functions suitable for use after
+    // fork(). The parent PID is captured before prctl and verified after to
+    // detect the parent exiting before prctl took effect (an edge-case race).
+    // Errors surface from spawn().
+    unsafe {
+        command.pre_exec(|| {
+            let parent_pid = getppid();
+            if prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if getppid() != parent_pid {
+                return Err(io::Error::other("parent process exited"));
+            }
+            Ok(())
+        });
+    }
 }
+
+#[cfg(not(target_os = "linux"))]
+fn apply_parent_death_signal(_command: &mut Command) {}
 
 /// Owns an inhibitor child process: detects exit, kills + reaps on Drop.
 pub(crate) struct ProcessGuard {
     child: Option<Child>,
-    options: Options,
 }
 
 impl ProcessGuard {
-    pub(crate) fn spawn(command: &mut Command, options: Options) -> io::Result<Self> {
-        if options.process_group {
-            command.process_group(0);
-        }
-        #[cfg(target_os = "linux")]
-        if options.pdeathsig {
-            // SAFETY: This closure runs in the child process after fork().
-            // getppid() and prctl() are async-signal-safe POSIX/Linux functions
-            // suitable for use after fork(). The parent PID is captured before
-            // prctl and verified after to detect if the parent exited before
-            // prctl took effect (an edge-case race).
-            unsafe {
-                command.pre_exec(|| {
-                    let parent_pid = getppid();
-                    if prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    if getppid() != parent_pid {
-                        return Err(io::Error::other("parent process exited"));
-                    }
-                    Ok(())
-                });
-            }
-        }
+    pub(crate) fn spawn(command: &mut Command) -> io::Result<Self> {
+        // The child leads its own process group, so Drop can kill the whole
+        // group and reap any grandchild the inhibitor spawned.
+        command.process_group(0);
+        apply_parent_death_signal(command);
         let child = command
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
-        Ok(ProcessGuard {
-            child: Some(child),
-            options,
-        })
+        Ok(ProcessGuard { child: Some(child) })
     }
 
     #[cfg(all(test, target_os = "linux"))]
@@ -97,23 +89,19 @@ impl ProcessGuard {
 impl Drop for ProcessGuard {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
-            if self.options.process_group {
-                // The child is its own process-group leader (process_group(0)),
-                // so killing the group also reaps any sleep grandchild that the
-                // inhibitor spawned, leaving nothing behind.
-                let pid = c.id();
-                if pid > 0 && pid <= i32::MAX as u32 {
-                    let process_group = -(pid as i32);
-                    // SAFETY: kill() is a POSIX function. The pid is a negative
-                    // process group ID (negated child PID), which kills the
-                    // entire process group. The PID is validated to be in
-                    // range for i32 and positive before negation.
-                    unsafe {
-                        kill(process_group, SIGKILL);
-                    }
+            // The child is its own process-group leader (process_group(0)), so
+            // killing the group also reaps any sleep grandchild that the
+            // inhibitor spawned, leaving nothing behind.
+            let pid = c.id();
+            if pid > 0 && pid <= i32::MAX as u32 {
+                let process_group = -(pid as i32);
+                // SAFETY: kill() is a POSIX function. The pid is a negative
+                // process group ID (negated child PID), which kills the entire
+                // process group. The PID is validated to be in range for i32
+                // and positive before negation.
+                unsafe {
+                    kill(process_group, SIGKILL);
                 }
-            } else {
-                let _ = c.kill();
             }
             let _ = c.wait();
         }
@@ -131,14 +119,7 @@ pub fn start_inhibit() -> io::Result<ProcessGuard> {
             "sleep",
             "2147483647",
         ]);
-        ProcessGuard::spawn(
-            &mut command,
-            Options {
-                process_group: true,
-                pdeathsig: true,
-            },
-        )
-        .map_err(|error| {
+        ProcessGuard::spawn(&mut command).map_err(|error| {
             io::Error::new(
                 error.kind(),
                 format!("failed to start systemd-inhibit: {error}"),
@@ -150,7 +131,7 @@ pub fn start_inhibit() -> io::Result<ProcessGuard> {
         let pid = std::process::id();
         let mut command = Command::new("caffeinate");
         command.args(["-d", "-i", "-w", &pid.to_string()]);
-        ProcessGuard::spawn(&mut command, Options::default()).map_err(|error| {
+        ProcessGuard::spawn(&mut command).map_err(|error| {
             io::Error::new(error.kind(), format!("failed to start caffeinate: {error}"))
         })
     }
@@ -167,7 +148,7 @@ mod tests {
     #[test]
     fn detects_an_exited_inhibitor() {
         let mut command = Command::new("true");
-        let mut guard = ProcessGuard::spawn(&mut command, Options::default()).unwrap();
+        let mut guard = ProcessGuard::spawn(&mut command).unwrap();
         // `true` exits immediately; the exit may already be visible on the
         // first check, so poll (bounded) until it is reported.
         for _ in 0..500 {
@@ -187,7 +168,7 @@ mod tests {
     fn drop_kills_a_running_inhibitor() {
         let mut command = Command::new("sleep");
         command.arg("30");
-        let guard = ProcessGuard::spawn(&mut command, Options::default()).unwrap();
+        let guard = ProcessGuard::spawn(&mut command).unwrap();
         let pid = guard.id() as i32;
         drop(guard);
         // SAFETY: kill(pid, 0) probes for existence; no signal is sent.
@@ -207,14 +188,7 @@ mod tests {
         let script = format!("sleep 30 & echo $! > '{}'; wait", pid_file.display());
         let mut command = Command::new("sh");
         command.arg("-c").arg(&script);
-        let guard = ProcessGuard::spawn(
-            &mut command,
-            Options {
-                process_group: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let guard = ProcessGuard::spawn(&mut command).unwrap();
 
         // Wait for the shell to report the grandchild PID.
         let mut grandchild: Option<i32> = None;
