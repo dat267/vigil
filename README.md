@@ -37,6 +37,28 @@ vigil --timeout=2h           # Equivalent long-option form
 | `-V, --version` | Print the installed version. |
 | `-h, --help` | Print help. |
 
+## Portable scripts (no Rust toolchain needed)
+
+- `vigil.ps1` — PowerShell, runs on Windows PowerShell 5.1+ and PowerShell 7+ (Windows, macOS, Linux)
+- `vigil.bat` — self-contained Windows batch file with the PowerShell engine embedded
+
+```powershell
+# PowerShell
+./vigil.ps1 -t 2h
+```
+
+```bat
+rem cmd
+vigil.bat -t 2h
+```
+
+Notes:
+
+- Execution policy may block `.ps1` files: run `powershell -ExecutionPolicy Bypass -File vigil.ps1` or unblock the downloaded file.
+- Ctrl+C in the `.bat` prompts "Terminate batch job (Y/N)?" — answer Y; cleanup still runs.
+- `vigil.bat` is generated from `vigil.ps1` (`tools/generate-bat.sh`); edit `vigil.ps1`, regenerate the `.bat`.
+- Flags, duration parsing, and messages mirror the Rust binary.
+
 ## How it works
 
 | Platform | Mechanism |

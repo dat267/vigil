@@ -51,8 +51,16 @@ jobs:
           toolchain: stable
       - run: cargo test
 
+  test-portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ubuntu runners ship pwsh; the suite black-box tests vigil.ps1 the
+      # same way tests/cli.rs tests the binary.
+      - run: pwsh -NoProfile -File tests/portable.tests.ps1
+
   build:
-    needs: [test, test-windows, test-macos]
+    needs: [test, test-windows, test-macos, test-portable]
     strategy:
       fail-fast: false
       matrix:
