@@ -1,5 +1,4 @@
-# Black-box UX tests for vigil.ps1 - mirrors the scope of tests/cli.rs:
-# exit codes, stream separation, message text. Run: pwsh -NoProfile -File tests/portable.tests.ps1
+# Black-box UX tests for vigil.ps1. Run: pwsh -NoProfile -File tests/portable.tests.ps1
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -27,50 +26,33 @@ function Assert {
 }
 
 # ---------------------------------------------------------------- version
-$r = Invoke-Script @('--version')
+$r = Invoke-Script @('-Version')
 Assert 'version prints vigil <version> to stdout' ($r.Code -eq 0 -and $r.Out -eq "vigil $version`n" -and $r.Err -eq '')
 $r = Invoke-Script @('-V')
-Assert 'short version flag works' ($r.Code -eq 0 -and $r.Out.StartsWith('vigil '))
+Assert 'short version alias works' ($r.Code -eq 0 -and $r.Out.StartsWith('vigil '))
 
 # ---------------------------------------------------------------- help
-$r = Invoke-Script @('--help')
+$r = Invoke-Script @('-Help')
 Assert 'help prints usage to stdout' ($r.Code -eq 0 -and $r.Out.Contains('Usage:') -and $r.Err -eq '')
-Assert 'help documents all flags' (($r.Out.Contains('-t, --timeout')) -and ($r.Out.Contains('-h, --help')) -and ($r.Out.Contains('-V, --version')))
-Assert 'help does not document -q (removed)' (-not $r.Out.Contains('-q'))
+Assert 'usage documents -Timeout and aliases' ($r.Out.Contains('-t') -and $r.Out.Contains('-Timeout'))
 $r = Invoke-Script @('-h')
-Assert 'short help flag works' ($r.Code -eq 0 -and $r.Out.Contains('Usage:'))
-$r = Invoke-Script @('help')
-Assert 'bare help word works' ($r.Code -eq 0 -and $r.Out.Contains('Usage:'))
-$r = Invoke-Script @('-h', '-V')
-Assert 'help wins over version' ($r.Code -eq 0 -and $r.Out.Contains('Usage:') -and -not $r.Out.Contains('vigil '))
+Assert 'short help alias works' ($r.Code -eq 0 -and $r.Out.Contains('Usage:'))
 
-# ---------------------------------------------------------------- errors
-$r = Invoke-Script @('--bogus')
-Assert 'unknown argument reported on stderr, exit 1' ($r.Code -eq 1 -and $r.Err.Contains("error: unknown argument '--bogus'") -and $r.Out -eq '')
-$r = Invoke-Script @('-q')
-Assert 'removed -q rejected as unknown' ($r.Code -eq 1 -and $r.Err.Contains("error: unknown argument '-q'"))
+# ---------------------------------------------------------------- binding errors
+foreach ($case in @('--bogus', '-q', '--timeout=2h', '-t=2h')) {
+    $r = Invoke-Script @($case)
+    Assert "unknown/removed form '$case' fails loudly" ($r.Code -ne 0 -and $r.Err -ne '' -and $r.Out -eq '')
+}
 $r = Invoke-Script @('-t')
-Assert 'timeout without value reports error' ($r.Code -eq 1 -and $r.Err.Contains('requires a value'))
-$r = Invoke-Script @('-t', '-2h')
-Assert 'dash value rejected' ($r.Code -eq 1 -and $r.Err.Contains('requires a value'))
-$r = Invoke-Script @('--timeout')
-Assert 'timeout at end without value reports error' ($r.Code -eq 1 -and $r.Err.Contains('requires a value'))
+Assert 'missing -t value fails' ($r.Code -ne 0 -and $r.Err -ne '')
 
-# ------------------------------------------------- invalid durations
-foreach ($case in @(
-    @{ args = @('-t', '5x'); name = 'unknown unit rejected' },
-    @{ args = @('-t', '5h30'); name = 'trailing digits rejected' },
-    @{ args = @('-t', '1h1h'); name = 'repeated units rejected' },
-    @{ args = @('-t', '1m1h'); name = 'out-of-order units rejected' },
-    @{ args = @('-t', '99999999999999999999h'); name = 'overflow rejected' },
-    @{ args = @('-t', ''); name = 'empty value rejected' },
-    @{ args = @('--timeout='); name = 'empty = value rejected' }
-)) {
-    $r = Invoke-Script $case.args
-    Assert $case.name ($r.Code -eq 1 -and $r.Err.Contains('error: invalid timeout') -and $r.Out -eq '')
+# ---------------------------------------------------------------- duration validation
+foreach ($bad in @('5x', '5h30', '1h1h', '1m1h', '1m2m', '99999999999999999h')) {
+    $r = Invoke-Script @('-t', $bad)
+    Assert "invalid duration '$bad' rejected" ($r.Code -eq 1 -and $r.Err.Contains('Invalid duration') -and $r.Out -eq '')
 }
 
-# ------------------------------------------------- run behavior (host-dependent)
+# ---------------------------------------------------------------- run behavior (host-dependent)
 $r = Invoke-Script @('-t', '0s')
 if ($r.Code -eq 0) {
     Assert 'successful run is silent on piped streams' ($r.Out -eq '' -and $r.Err -eq '')

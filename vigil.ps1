@@ -1,176 +1,87 @@
-# vigil.ps1 - keep your system awake. Portable PowerShell port of vigil.
-# Windows: SetThreadExecutionState (same mechanism as the Rust binary);
-# macOS: caffeinate; Linux: systemd-inhibit.
-# Works with Windows PowerShell 5.1+ and PowerShell 7+ (pwsh, any OS).
+<#
+.SYNOPSIS
+    Keeps the system awake.
+.DESCRIPTION
+    Windows uses SetThreadExecutionState (restored on exit, including Ctrl+C).
+    macOS uses caffeinate; Linux uses systemd-inhibit - run in the foreground
+    so Ctrl+C and the timeout reach the inhibitor directly.
+.EXAMPLE
+    vigil.ps1
+    Stays awake until Ctrl+C.
+.EXAMPLE
+    vigil.ps1 -t 1h30m
+    Stays awake for 1h30m, then exits.
+#>
+[CmdletBinding()]
+param(
+    # Duration to stay awake: 30s, 45m, 2h, 1h30m. Indefinite by default.
+    [Alias('t')]
+    [string]$Timeout,
+
+    # Print the version.
+    [Alias('V')]
+    [switch]$Version,
+
+    # Print usage.
+    [Alias('h')]
+    [switch]$Help
+)
 
 $VigilVersion = '0.0.2'
 
-function Write-VigilHelp {
-    # Keep the flag list and descriptions in sync with README.md.
-    [Console]::Out.WriteLine(@"
-Usage: vigil.ps1 [-t <duration>] [-V] [-h]
+if ($Help) {
+    Write-Output @'
+Usage: vigil.ps1 [-Timeout <duration>] [-Version] [-Help]
 
-Keep your system awake.
+Keep your system awake. -Timeout accepts 30s, 45m, 2h, 1h30m; indefinite by default.
+Aliases: -t = -Timeout, -V = -Version, -h = -Help.
+'@
+    exit 0
+}
+if ($Version) { Write-Output "vigil $VigilVersion"; exit 0 }
 
-Flags:
-  -t, --timeout <duration>  Stay awake for this long (e.g. 2h, 45m, 30s);
-                            --timeout=<duration> and -t=<duration> are
-                            also accepted. Infinite by default.
-  -h, --help                Print this help.
-  -V, --version             Print the version.
-"@)
+$timeoutSpan = $null
+if ($Timeout) {
+    $m = [regex]::Match($Timeout, '^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$')
+    if (-not $m.Success -or -not $m.Groups[1].Value + $m.Groups[2].Value + $m.Groups[3].Value) {
+        throw "Invalid duration '$Timeout' - use forms like 30s, 45m, 2h, 1h30m."
+    }
+    $seconds = [double]$m.Groups[1].Value * 3600 + [double]$m.Groups[2].Value * 60 + [double]$m.Groups[3].Value
+    if ($seconds -gt [int32]::MaxValue) {
+        throw "Invalid duration '$Timeout' - the maximum is 2147483647s (~68 years)."
+    }
+    $timeoutSpan = [timespan]::FromSeconds($seconds)
 }
 
-function Convert-ToSeconds {
-    # Mirrors the Rust parse_duration: units h, m, s in that order, each once,
-    # digits required before every unit, overflow rejected.
-    # Deviation: huge values are accumulated as doubles (exact far beyond any
-    # realistic timeout); the overflow boundary is approximate at ~1.8e19s.
-    param([string]$Value)
-    $maxSeconds = [double]18446744073709551615
-    if ([string]::IsNullOrEmpty($Value)) { throw 'empty duration' }
-    $stage = 0
-    $total = [double]0
-    $n = [double]0
-    $hasDigits = $false
-    foreach ($c in $Value.ToCharArray()) {
-        if ($c -ge '0' -and $c -le '9') {
-            $hasDigits = $true
-            $n = $n * 10 + [double]([int]$c - [int][char]'0')
-            if ($n -gt $maxSeconds) { throw 'overflow' }
-        } else {
-            if (-not $hasDigits) { throw "missing number before unit '$c'" }
-            switch ($c) {
-                'h' { $newStage = 1; $seconds = $n * 3600 }
-                'm' { $newStage = 2; $seconds = $n * 60 }
-                's' { $newStage = 3; $seconds = $n }
-                default { throw "unknown unit '$c' in duration" }
-            }
-            if ($stage -ge $newStage) {
-                throw "unit '$c' is out of order or repeated (expected order: h, m, s)"
-            }
-            $stage = $newStage
-            if ($seconds -gt $maxSeconds -or $total -gt $maxSeconds - $seconds) { throw 'overflow' }
-            $total += $seconds
-            $n = [double]0
-            $hasDigits = $false
-        }
-    }
-    if ($hasDigits) { throw 'digits must be followed by a unit (h, m, or s)' }
-    $total
-}
-
-function Invoke-Vigil {
-    param([string[]]$ArgList)
-
-    $showHelp = $false
-    $showVersion = $false
-    $timeoutSeconds = $null
-
-    $i = 0
-    while ($i -lt $ArgList.Count) {
-        $arg = $ArgList[$i]
-        if ($arg -eq '-h' -or $arg -eq '--help' -or $arg -eq 'help') {
-            $showHelp = $true
-        } elseif ($arg -eq '-V' -or $arg -eq '--version') {
-            $showVersion = $true
-        } elseif ($arg -eq '-t' -or $arg -eq '--timeout') {
-            $i++
-            if ($i -ge $ArgList.Count -or $ArgList[$i].StartsWith('-')) {
-                [Console]::Error.WriteLine("error: $arg requires a value")
-                return 1
-            }
-            try { $timeoutSeconds = Convert-ToSeconds $ArgList[$i] }
-            catch {
-                [Console]::Error.WriteLine("error: invalid timeout: $($_.Exception.Message)")
-                return 1
-            }
-        } elseif ($arg.StartsWith('--timeout=')) {
-            try { $timeoutSeconds = Convert-ToSeconds $arg.Substring('--timeout='.Length) }
-            catch {
-                [Console]::Error.WriteLine("error: invalid timeout: $($_.Exception.Message)")
-                return 1
-            }
-        } elseif ($arg.StartsWith('-t=')) {
-            try { $timeoutSeconds = Convert-ToSeconds $arg.Substring(3) }
-            catch {
-                [Console]::Error.WriteLine("error: invalid timeout: $($_.Exception.Message)")
-                return 1
-            }
-        } else {
-            [Console]::Error.WriteLine("error: unknown argument '$arg'")
-            return 1
-        }
-        $i++
-    }
-
-    if ($showHelp) { Write-VigilHelp; return 0 }
-    if ($showVersion) { [Console]::Out.WriteLine("vigil $VigilVersion"); return 0 }
-
-    $isWindowsHost = $IsWindows -or ($env:OS -eq 'Windows_NT')
-
-    if ($isWindowsHost) {
-        if (-not ('Vigil.Power' -as [type])) {
-            Add-Type -Namespace Vigil -Name Power -MemberDefinition @'
+if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+    if (-not ('Vigil.Power' -as [type])) {
+        Add-Type -Namespace Vigil -Name Power -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError = true)]
 public static extern uint SetThreadExecutionState(uint esFlags);
 '@
-        }
-        $ES_CONTINUOUS = [uint32]0x80000000
-        $ES_SYSTEM_REQUIRED = [uint32]0x1
-        $ES_DISPLAY_REQUIRED = [uint32]0x2
-        $state = [Vigil.Power]::SetThreadExecutionState(
-            $ES_CONTINUOUS -bor $ES_SYSTEM_REQUIRED -bor $ES_DISPLAY_REQUIRED)
-        if ($state -eq 0) {
-            [Console]::Error.WriteLine('error: could not inhibit sleep (SetThreadExecutionState failed)')
-            return 1
-        }
-        $timedOut = $false
-        try {
-            if (-not [Console]::IsOutputRedirected) {
-                [Console]::Out.WriteLine('Vigil started. Press Ctrl+C to stop.')
-            }
-            if ($null -ne $timeoutSeconds) {
-                # Cap at int32.MaxValue seconds (~68 years) - effectively infinite.
-                $seconds = [math]::Min([double]$timeoutSeconds, [double][int32]::MaxValue)
-                $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-                while ($stopwatch.Elapsed.TotalSeconds -lt $seconds) { Start-Sleep -Seconds 1 }
-                $timedOut = $true
-                if (-not [Console]::IsOutputRedirected) { [Console]::Out.WriteLine('Timeout reached.') }
-            } else {
-                while ($true) { Start-Sleep -Seconds 1 }
-            }
-        } finally {
-            # Restore so the system can sleep again, even on Ctrl+C.
-            [void][Vigil.Power]::SetThreadExecutionState($ES_CONTINUOUS)
-            if (-not $timedOut -and -not [Console]::IsOutputRedirected) {
-                [Console]::Out.WriteLine('Stopped.')
-            }
-        }
-        return 0
     }
-
-    # Unix: run the platform inhibitor in the foreground. Ctrl+C reaches it
-    # directly (same process group), and it exits on its own at the timeout.
-    if ($IsMacOS) {
-        $exe = 'caffeinate'
-        $childArgs = @('-d', '-i')
-        if ($null -ne $timeoutSeconds) {
-            $childArgs += @('-t', [string][math]::Min([double]$timeoutSeconds, [double][int32]::MaxValue))
-        }
-    } else {
-        $exe = 'systemd-inhibit'
-        $sleepFor = 2147483647
-        if ($null -ne $timeoutSeconds) { $sleepFor = $timeoutSeconds }
-        $childArgs = @('--what=idle:sleep', '--who=vigil', '--why=vigil', 'sleep', [string]$sleepFor)
+    if ([Vigil.Power]::SetThreadExecutionState(0x80000000 -bor 1 -bor 2) -eq 0) {
+        throw 'SetThreadExecutionState failed - cannot inhibit sleep.'
     }
     try {
-        & $exe @childArgs
-        return $LASTEXITCODE
-    } catch {
-        [Console]::Error.WriteLine("error: failed to start ${exe}: $($_.Exception.Message)")
-        return 1
+        if (-not [Console]::IsOutputRedirected) { Write-Output 'Vigil started. Press Ctrl+C to stop.' }
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($null -eq $timeoutSpan -or $stopwatch.Elapsed -lt $timeoutSpan) { Start-Sleep -Seconds 1 }
+        if (-not [Console]::IsOutputRedirected) { Write-Output 'Timeout reached.' }
+    } finally {
+        [void][Vigil.Power]::SetThreadExecutionState(0x80000000) # restore, even on Ctrl+C
     }
+    exit 0
 }
 
-exit (Invoke-Vigil @($args))
+# Unix: the inhibitor runs in the foreground; Ctrl+C and the timeout reach it directly.
+if ($IsMacOS) {
+    $child = @('caffeinate', '-d', '-i')
+    if ($timeoutSpan) { $child += @('-t', [string][int]$timeoutSpan.TotalSeconds) }
+} else {
+    $sleepFor = 2147483647
+    if ($timeoutSpan) { $sleepFor = [int]$timeoutSpan.TotalSeconds }
+    $child = @('systemd-inhibit', '--what=idle:sleep', '--who=vigil', '--why=vigil', 'sleep', [string]$sleepFor)
+}
+& $child[0] @($child | Select-Object -Skip 1)
+exit $LASTEXITCODE
