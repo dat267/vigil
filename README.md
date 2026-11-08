@@ -4,8 +4,9 @@ Keep your system awake. Works on Linux, macOS, and Windows.
 
 ## Install
 
+### Linux (amd64)
+
 ```bash
-# Linux (amd64)
 mkdir -p ~/.local/bin
 (
   set -eo pipefail
@@ -17,8 +18,11 @@ mkdir -p ~/.local/bin
   chmod +x vigil
   rm SHA256SUMS
 )
+```
 
-# macOS (Apple Silicon)
+### macOS (Apple Silicon)
+
+```bash
 mkdir -p ~/.local/bin
 (
   set -eo pipefail
@@ -30,9 +34,6 @@ mkdir -p ~/.local/bin
   chmod +x vigil
   rm SHA256SUMS
 )
-
-# Build from source (Rust stable)
-cargo install --git https://github.com/dat267/vigil
 ```
 
 ### Windows (PowerShell)
@@ -74,6 +75,14 @@ cargo install --git https://github.com/dat267/vigil
     Write-Host "Installed $dest\vigil.exe"
     if ($added) { Write-Host "Added $dest to your user PATH; open a new terminal to use vigil." }
 }
+```
+
+### Build from source
+
+Rust stable:
+
+```bash
+cargo install --git https://github.com/dat267/vigil
 ```
 
 > **Other architectures:** `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, `x86_64-apple-darwin`, `aarch64-pc-windows-msvc`
