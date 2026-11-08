@@ -163,7 +163,12 @@ impl Drop for ProcessGuard {
 /// the call site in main() stays cfg-free.
 pub fn explain_failure(message: &str) -> Option<&'static str> {
     let message = message.to_ascii_lowercase();
-    if message.contains("not found") || message.contains("no such file") {
+    // Only a failure to launch the inhibitor can mean the tool is absent. A
+    // runtime failure embeds the inhibitor's own stderr, which may mention a
+    // missing file for an unrelated reason.
+    if message.starts_with("failed to start ")
+        && (message.contains("not found") || message.contains("no such file"))
+    {
         // Pick the hint from the tool named in the error, not from the build
         // target: the message is the fact being explained, and this keeps the
         // mapping testable on every platform.
@@ -291,6 +296,17 @@ mod tests {
         assert!(
             message.contains("TAIL"),
             "the end of the error message must be kept"
+        );
+    }
+
+    #[test]
+    fn explain_failure_does_not_blame_a_missing_tool_for_runtime_stderr() {
+        let message =
+            "sleep inhibition failed: inhibitor exited (exit status: 1): No such file or directory";
+        assert_eq!(
+            explain_failure(message),
+            None,
+            "the inhibitor launched, so its stderr must not trigger the missing-binary hint"
         );
     }
 
