@@ -172,14 +172,17 @@ jobs:
           GH_REPO:  ${{ github.repository }}
         run: |
           PREFIX="${{ env.BIN_NAME }}/"
+          CURRENT_TAG="${{ steps.meta.outputs.tag }}"
           releases=$(gh release list --limit 100 --json tagName \
             | jq -r '.[].tagName' | grep "^${PREFIX}")
           count=0
           for tag in $releases; do
             count=$((count + 1))
-            # The first entry is the release this job just created; never
-            # delete it, even when KEEP_RELEASES is 0 or negative.
-            if [ "$count" -gt "${{ env.KEEP_RELEASES }}" ] && [ "$count" -gt 1 ]; then
+            # Never delete the release this job just created, even when
+            # KEEP_RELEASES is 0 or a concurrent run changes the list order.
+            if [ "$tag" = "$CURRENT_TAG" ]; then
+              echo "Keeping:  $tag (current release)"
+            elif [ "$count" -gt "${{ env.KEEP_RELEASES }}" ] && [ "$count" -gt 1 ]; then
               echo "Deleting: $tag"
               gh release delete "$tag" --yes --cleanup-tag || true
             else
