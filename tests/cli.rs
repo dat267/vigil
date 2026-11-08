@@ -300,3 +300,99 @@ fn short_timeout_exits_on_its_own() {
     let out = vigil(&["-t", "1s"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
 }
+
+// ------------------------------------------------ inhibitor wiring (no seat)
+//
+// The real inhibitor needs a desktop seat, which CI runners lack. These tests
+// put a stand-in on PATH so the spawn path, its exact argv, and the guarded
+// lifecycle are still exercised everywhere.
+
+#[cfg(unix)]
+mod inhibitor_wiring {
+    use super::{stderr, Command, Output};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("vigil-fake-inhibitor-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create fake inhibitor dir");
+        dir
+    }
+
+    /// Installs a stand-in inhibitor that records its argv, then stays alive so
+    /// vigil has a child to own. Returns the path of the argv record.
+    fn install(dir: &Path, name: &str) -> PathBuf {
+        let record = dir.join("argv");
+        let script = dir.join(name);
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 60\n",
+                record.display()
+            ),
+        )
+        .expect("write fake inhibitor");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+            .expect("chmod fake inhibitor");
+        record
+    }
+
+    fn run(tag: &str, name: &str) -> (Output, Vec<String>, PathBuf) {
+        let dir = temp_dir(tag);
+        let record = install(&dir, name);
+        let path = format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let out = Command::new(env!("CARGO_BIN_EXE_vigil"))
+            .args(["-t", "1s"])
+            .env("PATH", path)
+            .output()
+            .expect("spawn vigil with a fake inhibitor");
+        let argv = fs::read_to_string(&record)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        (out, argv, dir)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_spawns_systemd_inhibit_with_the_documented_arguments() {
+        let (out, argv, dir) = run("linux", "systemd-inhibit");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        assert_eq!(
+            argv,
+            [
+                "--what=idle:sleep",
+                "--who=vigil",
+                "--why=Inhibiting sleep",
+                "sleep",
+                "2147483647",
+            ]
+        );
+        assert_eq!(stderr(&out), "", "a working inhibitor must stay quiet");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_spawns_caffeinate_with_the_documented_arguments() {
+        let (out, argv, dir) = run("macos", "caffeinate");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        assert_eq!(argv.len(), 4, "got: {argv:?}");
+        assert_eq!(&argv[..3], ["-d", "-i", "-w"]);
+        assert!(
+            argv[3].parse::<u32>().is_ok_and(|pid| pid > 0),
+            "caffeinate must wait on vigil's pid, got: {:?}",
+            argv[3]
+        );
+        assert_eq!(stderr(&out), "", "a working inhibitor must stay quiet");
+    }
+}
