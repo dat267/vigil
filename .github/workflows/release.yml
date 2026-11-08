@@ -177,7 +177,9 @@ jobs:
           count=0
           for tag in $releases; do
             count=$((count + 1))
-            if [ "$count" -gt "${{ env.KEEP_RELEASES }}" ]; then
+            # The first entry is the release this job just created; never
+            # delete it, even when KEEP_RELEASES is 0 or negative.
+            if [ "$count" -gt "${{ env.KEEP_RELEASES }}" ] && [ "$count" -gt 1 ]; then
               echo "Deleting: $tag"
               gh release delete "$tag" --yes --cleanup-tag || true
             else
