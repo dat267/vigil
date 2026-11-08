@@ -6,10 +6,14 @@ Keep your system awake. Works on Linux, macOS, and Windows.
 
 ```bash
 # Linux (amd64)
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-x86_64-unknown-linux-gnu -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
+mkdir -p ~/.local/bin
+curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-x86_64-unknown-linux-gnu -o ~/.local/bin/vigil
+chmod +x ~/.local/bin/vigil
 
 # macOS (Apple Silicon)
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-aarch64-apple-darwin -o ~/.local/bin/vigil && chmod +x ~/.local/bin/vigil
+mkdir -p ~/.local/bin
+curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-aarch64-apple-darwin -o ~/.local/bin/vigil
+chmod +x ~/.local/bin/vigil
 
 # Build from source (Rust stable)
 cargo install --git https://github.com/dat267/vigil
