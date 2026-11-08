@@ -142,7 +142,10 @@ impl Drop for ProcessGuard {
 pub fn explain_failure(message: &str) -> Option<&'static str> {
     let message = message.to_ascii_lowercase();
     if message.contains("not found") || message.contains("no such file") {
-        if cfg!(target_os = "macos") {
+        // Pick the hint from the tool named in the error, not from the build
+        // target: the message is the fact being explained, and this keeps the
+        // mapping testable on every platform.
+        if message.contains("caffeinate") {
             return Some("caffeinate is built into macOS; check that it is on your PATH");
         }
         return Some("systemd-inhibit comes from systemd; install it or use a systemd host");
@@ -236,6 +239,13 @@ mod tests {
             message.contains("Access denied: no seat"),
             "check() must surface the inhibitor's own error, got: {message:?}"
         );
+    }
+
+    #[test]
+    fn explain_failure_points_at_caffeinate_for_a_missing_caffeinate() {
+        let hint = explain_failure("failed to start caffeinate: not found on PATH")
+            .expect("missing binary must have a hint");
+        assert!(hint.contains("caffeinate"), "got: {hint}");
     }
 
     #[test]
