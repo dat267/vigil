@@ -1,6 +1,9 @@
 use std::io;
+use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::time::Duration;
 
 // kill() is POSIX (Linux and macOS); prctl()/getppid() are only used by the
 // Linux parent-death linkage.
@@ -50,6 +53,7 @@ fn apply_parent_death_signal(_command: &mut Command) {}
 /// Owns an inhibitor child process: detects exit, kills + reaps on Drop.
 pub(crate) struct ProcessGuard {
     child: Option<Child>,
+    stderr: Option<Receiver<String>>,
 }
 
 impl ProcessGuard {
@@ -58,11 +62,23 @@ impl ProcessGuard {
         // group and reap any grandchild the inhibitor spawned.
         command.process_group(0);
         apply_parent_death_signal(command);
-        let child = command
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
-        Ok(ProcessGuard { child: Some(child) })
+        command.stdout(Stdio::null()).stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+        // Drain stderr on its own thread so a full pipe can never block the
+        // inhibitor, and so its own explanation is available when it fails.
+        let stderr = child.stderr.take().map(|mut pipe| {
+            let (sender, receiver) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let _ = pipe.read_to_string(&mut text);
+                let _ = sender.send(text);
+            });
+            receiver
+        });
+        Ok(ProcessGuard {
+            child: Some(child),
+            stderr,
+        })
     }
 
     #[cfg(test)]
@@ -79,10 +95,23 @@ impl ProcessGuard {
             Ok(None) => Ok(()),
             Ok(Some(status)) => {
                 self.child = None;
-                Err(format!("inhibitor exited ({status})"))
+                match self.take_stderr() {
+                    Some(detail) => Err(format!("inhibitor exited ({status}): {detail}")),
+                    None => Err(format!("inhibitor exited ({status})")),
+                }
             }
             Err(error) => Err(format!("could not check inhibitor: {error}")),
         }
+    }
+
+    /// The inhibitor's stderr, collapsed to one line, once it has exited.
+    /// Bounded: a lingering grandchild could hold the pipe open, and reporting
+    /// must never hang the main loop.
+    fn take_stderr(&mut self) -> Option<String> {
+        let receiver = self.stderr.take()?;
+        let text = receiver.recv_timeout(Duration::from_millis(250)).ok()?;
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!text.is_empty()).then_some(text)
     }
 }
 
@@ -108,6 +137,33 @@ impl Drop for ProcessGuard {
     }
 }
 
+/// Maps a failure message to an actionable hint. Uniform across platforms so
+/// the call site in main() stays cfg-free.
+pub fn explain_failure(message: &str) -> Option<&'static str> {
+    let message = message.to_ascii_lowercase();
+    if message.contains("not found") || message.contains("no such file") {
+        if cfg!(target_os = "macos") {
+            return Some("caffeinate is built into macOS; check that it is on your PATH");
+        }
+        return Some("systemd-inhibit comes from systemd; install it or use a systemd host");
+    }
+    if message.contains("access denied")
+        || message.contains("permission denied")
+        || message.contains("failed to inhibit")
+    {
+        return Some(
+            "systemd-inhibit needs a local seat session; run from a desktop terminal, or with sudo",
+        );
+    }
+    if message.contains("connection refused")
+        || message.contains("failed to connect")
+        || message.contains("no such device")
+    {
+        return Some("logind is not reachable; check that systemd-logind is running");
+    }
+    None
+}
+
 pub fn start_inhibit() -> io::Result<ProcessGuard> {
     #[cfg(target_os = "linux")]
     {
@@ -120,10 +176,17 @@ pub fn start_inhibit() -> io::Result<ProcessGuard> {
             "2147483647",
         ]);
         ProcessGuard::spawn(&mut command).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("failed to start systemd-inhibit: {error}"),
-            )
+            if error.kind() == io::ErrorKind::NotFound {
+                io::Error::new(
+                    error.kind(),
+                    "failed to start systemd-inhibit: not found on PATH",
+                )
+            } else {
+                io::Error::new(
+                    error.kind(),
+                    format!("failed to start systemd-inhibit: {error}"),
+                )
+            }
         })
     }
     #[cfg(target_os = "macos")]
@@ -132,7 +195,14 @@ pub fn start_inhibit() -> io::Result<ProcessGuard> {
         let mut command = Command::new("caffeinate");
         command.args(["-d", "-i", "-w", &pid.to_string()]);
         ProcessGuard::spawn(&mut command).map_err(|error| {
-            io::Error::new(error.kind(), format!("failed to start caffeinate: {error}"))
+            if error.kind() == io::ErrorKind::NotFound {
+                io::Error::new(
+                    error.kind(),
+                    "failed to start caffeinate: not found on PATH",
+                )
+            } else {
+                io::Error::new(error.kind(), format!("failed to start caffeinate: {error}"))
+            }
         })
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -144,6 +214,60 @@ pub fn start_inhibit() -> io::Result<ProcessGuard> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_reports_the_inhibitors_stderr() {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("echo 'Access denied: no seat' >&2; exit 3");
+        let mut guard = ProcessGuard::spawn(&mut command).unwrap();
+        let mut message = String::new();
+        for _ in 0..500 {
+            match guard.check() {
+                Ok(()) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(error) => {
+                    message = error;
+                    break;
+                }
+            }
+        }
+        assert!(
+            message.contains("Access denied: no seat"),
+            "check() must surface the inhibitor's own error, got: {message:?}"
+        );
+    }
+
+    #[test]
+    fn explain_failure_points_at_the_seat_for_access_denied() {
+        let hint =
+            explain_failure("inhibitor exited (exit status: 1): Failed to inhibit: Access denied")
+                .expect("access denied must have a hint");
+        assert!(hint.contains("seat"), "got: {hint}");
+    }
+
+    #[test]
+    fn explain_failure_points_at_systemd_for_a_missing_binary() {
+        let hint = explain_failure(
+            "failed to start systemd-inhibit: No such file or directory (os error 2)",
+        )
+        .expect("missing binary must have a hint");
+        assert!(hint.contains("systemd"), "got: {hint}");
+    }
+
+    #[test]
+    fn explain_failure_points_at_logind_when_the_bus_is_unreachable() {
+        let hint = explain_failure(
+            "Failed to connect to system scope bus via local transport: Connection refused",
+        )
+        .expect("unreachable bus must have a hint");
+        assert!(hint.contains("logind"), "got: {hint}");
+    }
+
+    #[test]
+    fn explain_failure_has_no_hint_for_unrecognized_errors() {
+        assert_eq!(explain_failure("inhibitor exited (exit status: 1)"), None);
+    }
 
     #[test]
     fn detects_an_exited_inhibitor() {

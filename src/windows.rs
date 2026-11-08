@@ -47,6 +47,12 @@ pub fn start_inhibit() -> io::Result<InhibitGuard> {
     InhibitGuard::new()
 }
 
+/// Windows has no external inhibitor to diagnose; a failed
+/// SetThreadExecutionState call carries no extra context to map.
+pub fn explain_failure(_message: &str) -> Option<&'static str> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

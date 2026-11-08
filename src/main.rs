@@ -107,14 +107,22 @@ fn help() {
         "\
 Usage: vigil [-t <duration>] [-V] [-h]
 
-Keep your system awake.
+Keep your system awake. Vigil holds a sleep inhibitor until you stop it with
+Ctrl+C, or until its timeout elapses.
 
-Flags:
-  -t, --timeout <duration>  Stay awake for this long (e.g. 2h, 45m, 30s); \
-                             --timeout=<duration> and -t=<duration> are \
-                             also accepted. Infinite by default.
+Options:
+  -t, --timeout <duration>  How long to stay awake: 30s, 45m, 2h, 1h30m.
+                            Units are h, m, and s, in that order.
+                            Omit to stay awake until stopped.
   -h, --help                Print this help.
-  -V, --version             Print the version."
+  -V, --version             Print the version.
+
+Examples:
+  vigil                     stay awake until Ctrl+C
+  vigil -t 2h               stay awake for 2 hours
+  vigil --timeout=1h30m     same, using the long form
+
+Status output appears only in a terminal; piped output stays silent."
     );
 }
 
@@ -124,6 +132,97 @@ fn version() {
 
 fn version_string() -> String {
     format!("vigil {}", env!("CARGO_PKG_VERSION"))
+}
+
+/// Compact, human-readable duration: "45s", "1m30s", "2h", "1h2m3s".
+fn fmt_duration(duration: Duration) -> String {
+    let total = duration.as_secs();
+    if total == 0 {
+        return "0s".into();
+    }
+    let (hours, minutes, seconds) = (total / 3600, total % 3600 / 60, total % 60);
+    let mut text = String::new();
+    if hours > 0 {
+        text.push_str(&format!("{hours}h"));
+    }
+    if minutes > 0 {
+        text.push_str(&format!("{minutes}m"));
+    }
+    if seconds > 0 {
+        text.push_str(&format!("{seconds}s"));
+    }
+    text
+}
+
+/// One status line for the TTY, e.g. "Awake 1m5s | 58m55s left".
+fn render_status(elapsed: Duration, timeout: Option<Duration>) -> String {
+    match timeout {
+        Some(limit) => format!(
+            "Awake {} | {} left",
+            fmt_duration(elapsed),
+            fmt_duration(limit.saturating_sub(elapsed))
+        ),
+        None => format!("Awake {}", fmt_duration(elapsed)),
+    }
+}
+
+/// The text needed to overwrite `previous` columns with `line`. Padding (rather
+/// than ANSI erase) keeps this working on consoles without VT processing.
+fn overwrite(previous: usize, line: &str) -> String {
+    let padding = previous.saturating_sub(line.chars().count());
+    format!("\r{line}{}", " ".repeat(padding))
+}
+
+/// The single status line shown on a terminal, redrawn in place.
+#[derive(Default)]
+struct StatusLine {
+    width: usize,
+}
+
+impl StatusLine {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn draw(&mut self, line: &str) {
+        let mut stdout = std::io::stdout();
+        let _ = write!(stdout, "{}", overwrite(self.width, line));
+        let _ = stdout.flush();
+        self.width = line.chars().count();
+    }
+
+    /// Blanks the line and returns the cursor to its start.
+    fn erase(&mut self) {
+        let mut stdout = std::io::stdout();
+        let _ = write!(stdout, "\r{}\r", " ".repeat(self.width));
+        let _ = stdout.flush();
+        self.width = 0;
+    }
+
+    /// Replaces the line with a summary and moves to a fresh line.
+    fn finish(&mut self, line: &str) {
+        let mut stdout = std::io::stdout();
+        let _ = writeln!(stdout, "{}", overwrite(self.width, line));
+        let _ = stdout.flush();
+        self.width = 0;
+    }
+}
+
+/// Sleeps until the next poll, waking early when the timeout expires sooner.
+fn wait_for_next_poll(elapsed: Duration, timeout: Option<Duration>) -> Duration {
+    match timeout {
+        Some(limit) => POLL_INTERVAL.min(limit.saturating_sub(elapsed)),
+        None => POLL_INTERVAL,
+    }
+}
+
+/// Reports a fatal runtime error, plus an actionable hint when one is known.
+fn fail(message: &str) -> ExitCode {
+    report_error(&format!("error: {message}"));
+    if let Some(hint) = platform::explain_failure(message) {
+        report_error(&format!("help: {hint}"));
+    }
+    ExitCode::from(1)
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {
@@ -195,7 +294,9 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
             "-t" | "--timeout" => {
                 i += 1;
                 if i >= args.len() || args[i].starts_with('-') {
-                    return Err(format!("error: {arg} requires a value"));
+                    return Err(format!(
+                        "error: {arg} requires a value (for example: -t 2h)"
+                    ));
                 }
                 set_timeout(&mut options, &args[i])?;
             }
@@ -221,6 +322,11 @@ fn main() -> ExitCode {
         Ok(options) => options,
         Err(error) => {
             report_error(&error);
+            if error.contains("invalid timeout") {
+                report_error("help: durations look like 30s, 45m, 2h, or 1h30m");
+            } else {
+                report_error("help: run 'vigil --help' for usage");
+            }
             return ExitCode::from(1);
         }
     };
@@ -235,48 +341,62 @@ fn main() -> ExitCode {
     }
 
     if let Err(error) = sig::install() {
-        report_error(&format!("error: {error}"));
-        return ExitCode::from(1);
+        return fail(&error);
     }
     let mut guard = match platform::start_inhibit() {
         Ok(guard) => guard,
-        Err(error) => {
-            report_error(&format!("error: {error}"));
-            return ExitCode::from(1);
-        }
+        Err(error) => return fail(&error.to_string()),
     };
 
     let start = Instant::now();
     let tty = std::io::stdout().is_terminal();
+    let mut status = StatusLine::new();
 
     if tty {
-        outln!("Vigil started. Press Ctrl+C to stop.");
+        match options.timeout {
+            Some(limit) => outln!(
+                "Vigil: preventing sleep for {} (Ctrl+C to stop).",
+                fmt_duration(limit)
+            ),
+            None => outln!("Vigil: preventing sleep (Ctrl+C to stop)."),
+        }
     }
 
     loop {
         if sig::check() {
             if tty {
-                outln!("\rStopped.              ");
+                status.finish(&format!(
+                    "Awake {}. Stopped.",
+                    fmt_duration(start.elapsed())
+                ));
             }
             break;
         }
 
         if let Err(error) = guard.check() {
-            report_error(&format!("error: sleep inhibition was lost: {error}"));
-            return ExitCode::from(1);
+            if tty {
+                status.erase();
+            }
+            return fail(&format!("sleep inhibition failed: {error}"));
         }
 
-        if let Some(dur) = options.timeout {
-            if start.elapsed() >= dur {
+        let elapsed = start.elapsed();
+        if let Some(limit) = options.timeout {
+            if elapsed >= limit {
                 if tty {
-                    outln!("\rTimeout reached.        ");
+                    status.finish(&format!(
+                        "Awake {}. Timeout reached.",
+                        fmt_duration(elapsed)
+                    ));
                 }
-                drop(guard);
                 break;
             }
         }
 
-        std::thread::sleep(POLL_INTERVAL);
+        if tty {
+            status.draw(&render_status(elapsed, options.timeout));
+        }
+        std::thread::sleep(wait_for_next_poll(elapsed, options.timeout));
     }
 
     ExitCode::SUCCESS
@@ -285,6 +405,45 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_fmt_duration_is_compact() {
+        assert_eq!(fmt_duration(Duration::from_secs(0)), "0s");
+        assert_eq!(fmt_duration(Duration::from_secs(45)), "45s");
+        assert_eq!(fmt_duration(Duration::from_secs(90)), "1m30s");
+        assert_eq!(fmt_duration(Duration::from_secs(3600)), "1h");
+        assert_eq!(fmt_duration(Duration::from_secs(5400)), "1h30m");
+        assert_eq!(fmt_duration(Duration::from_secs(3723)), "1h2m3s");
+        assert_eq!(fmt_duration(Duration::from_secs(90000)), "25h");
+    }
+
+    #[test]
+    fn test_overwrite_pads_shorter_lines() {
+        assert_eq!(overwrite(10, "abc"), "\rabc       ");
+        assert_eq!(overwrite(3, "abcdef"), "\rabcdef");
+        assert_eq!(overwrite(0, "abc"), "\rabc");
+    }
+
+    #[test]
+    fn test_render_status_counts_down() {
+        assert_eq!(
+            render_status(Duration::from_secs(65), Some(Duration::from_secs(3600))),
+            "Awake 1m5s | 58m55s left"
+        );
+    }
+
+    #[test]
+    fn test_render_status_without_timeout() {
+        assert_eq!(render_status(Duration::from_secs(65), None), "Awake 1m5s");
+    }
+
+    #[test]
+    fn test_render_status_never_shows_negative_time() {
+        assert_eq!(
+            render_status(Duration::from_secs(10), Some(Duration::from_secs(5))),
+            "Awake 10s | 0s left"
+        );
+    }
 
     #[test]
     fn test_parse_hours() {

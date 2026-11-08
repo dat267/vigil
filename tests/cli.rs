@@ -92,7 +92,50 @@ fn bare_help_word_prints_usage() {
     assert!(stdout(&out).contains("Usage: vigil"));
 }
 
+#[test]
+fn help_lists_examples() {
+    let out = vigil(&["--help"]);
+    let text = stdout(&out);
+    assert!(text.contains("Examples:"), "got: {text:?}");
+    assert!(text.contains("vigil -t 2h"), "got: {text:?}");
+}
+
 // ---------------------------------------------------------------- errors
+
+#[test]
+fn unknown_argument_points_to_help() {
+    let out = vigil(&["--bogus"]);
+    assert!(
+        stderr(&out).contains("help:"),
+        "an unknown flag must say how to get help, got: {:?}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn invalid_duration_shows_the_accepted_forms() {
+    let out = vigil(&["-t", "5x"]);
+    assert!(
+        stderr(&out).contains("30s, 45m, 2h"),
+        "a bad duration must show valid forms, got: {:?}",
+        stderr(&out)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn missing_systemd_inhibit_is_explained_with_a_hint() {
+    let out = Command::new(env!("CARGO_BIN_EXE_vigil"))
+        .args(["-t", "1s"])
+        .env("PATH", "")
+        .output()
+        .expect("failed to spawn vigil binary");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(stdout(&out), "", "errors must not leak to stdout");
+    let err = stderr(&out);
+    assert!(err.contains("systemd-inhibit"), "got: {err:?}");
+    assert!(err.contains("help:"), "got: {err:?}");
+}
 
 #[test]
 fn unknown_argument_is_reported_on_stderr_with_exit_code_1() {

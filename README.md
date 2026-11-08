@@ -29,29 +29,33 @@ vigil -t 2h                  # Stay awake for 2 hours, then exit
 vigil --timeout=2h           # Equivalent long-option form
 ```
 
+In a terminal, vigil shows what it is doing and how much time is left:
+
+```
+$ vigil -t 2h
+Vigil: preventing sleep for 2h (Ctrl+C to stop).
+Awake 1m5s | 1h58m55s left
+```
+
+On exit it prints a one-line summary (`Awake 2h. Timeout reached.`). When
+stdout is not a terminal (pipes, logs, CI) vigil stays silent, so
+`vigil > /dev/null` behaves as a quiet mode.
+
+If sleep inhibition cannot start or is lost, the error includes the platform's
+own explanation plus a `help:` hint when one is known:
+
+```
+error: sleep inhibition failed: inhibitor exited (exit status: 1): Failed to connect to system scope bus via local transport: Connection refused
+help: logind is not reachable; check that systemd-logind is running
+```
+
 **Flags:**
 
 | Flag | Description |
 |------|-------------|
 | `-t, --timeout <DURATION>` | Duration to stay awake (e.g. `30s`, `45m`, `2h`, `1h30m`). `--timeout=DURATION` and `-t=DURATION` are also accepted. Omit for indefinite. |
 | `-V, --version` | Print the installed version. |
-| `-h, --help` | Print help. |
-
-## Portable script (no Rust toolchain needed)
-
-`vigil.ps1` is a single-file PowerShell port: same behavior as the binary,
-using the platform's native mechanism (`SetThreadExecutionState` on Windows,
-`caffeinate` on macOS, `systemd-inhibit` on Linux).
-
-```powershell
-# Windows PowerShell 5.1+ or PowerShell 7+ (Windows, macOS, Linux)
-./vigil.ps1            # awake until Ctrl+C
-./vigil.ps1 -t 2h      # awake for 2 hours (aliases: -t = -Timeout)
-./vigil.ps1 -V         # version
-```
-
-Execution policy may block downloaded scripts: run
-`powershell -ExecutionPolicy Bypass -File vigil.ps1` or unblock the file first.
+| `-h, --help` | Print help, including examples. |
 
 ## How it works
 
