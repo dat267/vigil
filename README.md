@@ -38,8 +38,9 @@ mkdir -p ~/.local/bin
 
 ### Windows (PowerShell)
 
+Windows (x64), PowerShell 5.1+.
+
 ```powershell
-# Windows (x64), PowerShell 5.1+
 & {
     $asset = 'vigil-x86_64-pc-windows-msvc.exe'
     $base  = 'https://github.com/dat267/vigil/releases/latest/download'
