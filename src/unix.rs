@@ -22,6 +22,9 @@ const SIGKILL: i32 = 9;
 const PR_SET_PDEATHSIG: i32 = 1;
 #[cfg(target_os = "linux")]
 const SIGTERM: i32 = 15;
+/// `ESRCH` ("no such process") is 3 on Linux and macOS.
+#[cfg(target_os = "linux")]
+const ESRCH: i32 = 3;
 
 /// Ask the kernel to signal the child if vigil dies. Linux implements this via
 /// PR_SET_PDEATHSIG; elsewhere it is a no-op. The uniform signature keeps the
@@ -40,7 +43,10 @@ fn apply_parent_death_signal(command: &mut Command) {
                 return Err(io::Error::last_os_error());
             }
             if getppid() != parent_pid {
-                return Err(io::Error::other("parent process exited"));
+                // pre_exec runs after fork, where allocation is not
+                // async-signal-safe. Report the race with a raw OS error
+                // instead of io::Error::other, which boxes a string.
+                return Err(io::Error::from_raw_os_error(ESRCH));
             }
             Ok(())
         });
