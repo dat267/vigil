@@ -35,11 +35,47 @@ mkdir -p ~/.local/bin
 cargo install --git https://github.com/dat267/vigil
 ```
 
-> **Windows:** Download `vigil-x86_64-pc-windows-msvc.exe` and `SHA256SUMS`
-> from [releases](https://github.com/dat267/vigil/releases). Verify the download
-> with `Get-FileHash .\vigil-x86_64-pc-windows-msvc.exe -Algorithm SHA256`
-> against the matching line in `SHA256SUMS`, then add the binary to your PATH.
->
+### Windows (PowerShell)
+
+```powershell
+# Windows (x64), PowerShell 5.1+
+& {
+    $asset = 'vigil-x86_64-pc-windows-msvc.exe'
+    $base  = 'https://github.com/dat267/vigil/releases/latest/download'
+    $dest  = Join-Path $HOME 'bin'
+    $tmp   = Join-Path ([IO.Path]::GetTempPath()) ("vigil-" + [guid]::NewGuid())
+
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    New-Item -ItemType Directory -Force -Path $dest, $tmp | Out-Null
+
+    try {
+        Invoke-WebRequest "$base/$asset" -OutFile (Join-Path $tmp $asset) -UseBasicParsing
+        Invoke-WebRequest "$base/SHA256SUMS" -OutFile (Join-Path $tmp 'SHA256SUMS') -UseBasicParsing
+        $entry = Select-String -Path (Join-Path $tmp 'SHA256SUMS') `
+            -Pattern " $([regex]::Escape($asset))$" | Select-Object -First 1
+        if (-not $entry) { throw "No checksum for $asset in SHA256SUMS" }
+        $expected = $entry.Line.Split()[0].ToUpper()
+        $actual = (Get-FileHash (Join-Path $tmp $asset) -Algorithm SHA256).Hash.ToUpper()
+        if ($actual -ne $expected) { throw "Checksum mismatch for $asset" }
+        Move-Item -Force (Join-Path $tmp $asset) (Join-Path $dest 'vigil.exe')
+    } finally {
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (-not $userPath) { $userPath = '' }
+    $parts = @($userPath -split ';' | Where-Object { $_ })
+    $added = $parts -notcontains $dest
+    if ($added) {
+        [Environment]::SetEnvironmentVariable('Path', (($parts + $dest) -join ';'), 'User')
+        $env:Path = "$env:Path;$dest"
+    }
+    Write-Host "Installed $dest\vigil.exe"
+    if ($added) { Write-Host "Added $dest to your user PATH; open a new terminal to use vigil." }
+}
+```
+
 > **Other architectures:** `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, `x86_64-apple-darwin`, `aarch64-pc-windows-msvc`
 >
 > **Linux via SSH:** `systemd-inhibit` requires an active local seat session. Run with `sudo` if denied.
