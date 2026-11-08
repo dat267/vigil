@@ -50,6 +50,32 @@ fn apply_parent_death_signal(command: &mut Command) {
 #[cfg(not(target_os = "linux"))]
 fn apply_parent_death_signal(_command: &mut Command) {}
 
+/// Bytes of inhibitor stderr kept for diagnostics. Anything older is dropped:
+/// the last write is the one that reports the failure.
+const STDERR_TAIL: usize = 4096;
+
+/// Drains `pipe` to EOF, keeping only the last `STDERR_TAIL` bytes. Draining
+/// rather than closing keeps a chatty child from blocking on write, and the
+/// bound keeps its output from growing vigil's memory for the whole session.
+fn drain_stderr(mut pipe: impl Read, sender: mpsc::Sender<String>) {
+    let mut tail = Vec::with_capacity(STDERR_TAIL);
+    let mut chunk = [0u8; 1024];
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                tail.extend_from_slice(&chunk[..n]);
+                if tail.len() > STDERR_TAIL {
+                    tail.drain(..tail.len() - STDERR_TAIL);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    let _ = sender.send(String::from_utf8_lossy(&tail).into_owned());
+}
+
 /// Owns an inhibitor child process: detects exit, kills + reaps on Drop.
 pub(crate) struct ProcessGuard {
     child: Option<Child>,
@@ -66,13 +92,9 @@ impl ProcessGuard {
         let mut child = command.spawn()?;
         // Drain stderr on its own thread so a full pipe can never block the
         // inhibitor, and so its own explanation is available when it fails.
-        let stderr = child.stderr.take().map(|mut pipe| {
+        let stderr = child.stderr.take().map(|pipe| {
             let (sender, receiver) = mpsc::channel();
-            std::thread::spawn(move || {
-                let mut text = String::new();
-                let _ = pipe.read_to_string(&mut text);
-                let _ = sender.send(text);
-            });
+            std::thread::spawn(move || drain_stderr(pipe, sender));
             receiver
         });
         Ok(ProcessGuard {
@@ -238,6 +260,37 @@ mod tests {
         assert!(
             message.contains("Access denied: no seat"),
             "check() must surface the inhibitor's own error, got: {message:?}"
+        );
+    }
+
+    #[test]
+    fn check_caps_the_captured_stderr() {
+        // 64 KiB of diagnostics: a real inhibitor writes a line or two, but a
+        // chatty one must not grow vigil's memory for the whole session.
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("head -c 65536 /dev/zero | tr '\\0' x >&2; echo TAIL >&2");
+        let mut guard = ProcessGuard::spawn(&mut command).unwrap();
+        let mut message = String::new();
+        for _ in 0..500 {
+            match guard.check() {
+                Ok(()) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(error) => {
+                    message = error;
+                    break;
+                }
+            }
+        }
+        assert!(!message.is_empty(), "the exit must be reported");
+        assert!(
+            message.len() <= 8192,
+            "captured stderr must be bounded, got {} bytes",
+            message.len()
+        );
+        assert!(
+            message.contains("TAIL"),
+            "the end of the error message must be kept"
         );
     }
 
