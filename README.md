@@ -7,19 +7,38 @@ Keep your system awake. Works on Linux, macOS, and Windows.
 ```bash
 # Linux (amd64)
 mkdir -p ~/.local/bin
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-x86_64-unknown-linux-gnu -o ~/.local/bin/vigil
-chmod +x ~/.local/bin/vigil
+(
+  set -eo pipefail
+  cd ~/.local/bin
+  curl -fsSLO https://github.com/dat267/vigil/releases/latest/download/vigil-x86_64-unknown-linux-gnu
+  curl -fsSLO https://github.com/dat267/vigil/releases/latest/download/SHA256SUMS
+  grep 'vigil-x86_64-unknown-linux-gnu$' SHA256SUMS | sha256sum -c -
+  mv vigil-x86_64-unknown-linux-gnu vigil
+  chmod +x vigil
+  rm SHA256SUMS
+)
 
 # macOS (Apple Silicon)
 mkdir -p ~/.local/bin
-curl -fsSL https://github.com/dat267/vigil/releases/latest/download/vigil-aarch64-apple-darwin -o ~/.local/bin/vigil
-chmod +x ~/.local/bin/vigil
+(
+  set -eo pipefail
+  cd ~/.local/bin
+  curl -fsSLO https://github.com/dat267/vigil/releases/latest/download/vigil-aarch64-apple-darwin
+  curl -fsSLO https://github.com/dat267/vigil/releases/latest/download/SHA256SUMS
+  grep 'vigil-aarch64-apple-darwin$' SHA256SUMS | shasum -a 256 -c -
+  mv vigil-aarch64-apple-darwin vigil
+  chmod +x vigil
+  rm SHA256SUMS
+)
 
 # Build from source (Rust stable)
 cargo install --git https://github.com/dat267/vigil
 ```
 
-> **Windows:** Download `vigil-x86_64-pc-windows-msvc.exe` from [releases](https://github.com/dat267/vigil/releases) and add it to your PATH.
+> **Windows:** Download `vigil-x86_64-pc-windows-msvc.exe` and `SHA256SUMS`
+> from [releases](https://github.com/dat267/vigil/releases). Verify the download
+> with `Get-FileHash .\vigil-x86_64-pc-windows-msvc.exe -Algorithm SHA256`
+> against the matching line in `SHA256SUMS`, then add the binary to your PATH.
 >
 > **Other architectures:** `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, `x86_64-apple-darwin`, `aarch64-pc-windows-msvc`
 >
