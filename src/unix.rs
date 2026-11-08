@@ -163,19 +163,28 @@ impl Drop for ProcessGuard {
 /// the call site in main() stays cfg-free.
 pub fn explain_failure(message: &str) -> Option<&'static str> {
     let message = message.to_ascii_lowercase();
-    // Only a failure to launch the inhibitor can mean the tool is absent. A
-    // runtime failure embeds the inhibitor's own stderr, which may mention a
-    // missing file for an unrelated reason.
-    if message.starts_with("failed to start ")
-        && (message.contains("not found") || message.contains("no such file"))
-    {
-        // Pick the hint from the tool named in the error, not from the build
-        // target: the message is the fact being explained, and this keeps the
-        // mapping testable on every platform.
-        if message.contains("caffeinate") {
-            return Some("caffeinate is built into macOS; check that it is on your PATH");
+    // Only a failure to launch the inhibitor can mean the tool is absent or
+    // not executable. A runtime failure embeds the inhibitor's own stderr,
+    // which may mention the same words for an unrelated reason.
+    if message.starts_with("failed to start ") {
+        let caffeinate = message.contains("caffeinate");
+        if message.contains("not found") || message.contains("no such file") {
+            // Pick the hint from the tool named in the error, not from the
+            // build target: the message is the fact being explained, and this
+            // keeps the mapping testable on every platform.
+            return Some(if caffeinate {
+                "caffeinate is built into macOS; check that it is on your PATH"
+            } else {
+                "systemd-inhibit comes from systemd; install it or use a systemd host"
+            });
         }
-        return Some("systemd-inhibit comes from systemd; install it or use a systemd host");
+        if message.contains("permission denied") || message.contains("access denied") {
+            return Some(if caffeinate {
+                "check that caffeinate is executable"
+            } else {
+                "check that systemd-inhibit is executable and readable"
+            });
+        }
     }
     if message.contains("access denied")
         || message.contains("permission denied")
@@ -308,6 +317,21 @@ mod tests {
             None,
             "the inhibitor launched, so its stderr must not trigger the missing-binary hint"
         );
+    }
+
+    #[test]
+    fn explain_failure_points_at_executable_for_a_non_executable_inhibitor() {
+        let hint =
+            explain_failure("failed to start systemd-inhibit: Permission denied (os error 13)")
+                .expect("a spawn permission error must have a hint");
+        assert!(hint.contains("executable"), "got: {hint}");
+    }
+
+    #[test]
+    fn explain_failure_points_at_executable_for_a_non_executable_caffeinate() {
+        let hint = explain_failure("failed to start caffeinate: Permission denied (os error 13)")
+            .expect("a spawn permission error must have a hint");
+        assert!(hint.contains("executable"), "got: {hint}");
     }
 
     #[test]
