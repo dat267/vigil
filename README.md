@@ -7,9 +7,9 @@ Keep your system awake. Works on Linux, macOS, and Windows.
 ### Linux (amd64)
 
 ```bash
-mkdir -p ~/.local/bin
 (
   set -eo pipefail
+  mkdir -p ~/.local/bin
   cd ~/.local/bin
   curl -fsSLO https://github.com/dat267/vigil/releases/latest/download/vigil-x86_64-unknown-linux-gnu
   curl -fsSLO https://github.com/dat267/vigil/releases/latest/download/SHA256SUMS
@@ -23,9 +23,9 @@ mkdir -p ~/.local/bin
 ### macOS (Apple Silicon)
 
 ```bash
-mkdir -p ~/.local/bin
 (
   set -eo pipefail
+  mkdir -p ~/.local/bin
   cd ~/.local/bin
   curl -fsSLO https://github.com/dat267/vigil/releases/latest/download/vigil-aarch64-apple-darwin
   curl -fsSLO https://github.com/dat267/vigil/releases/latest/download/SHA256SUMS
