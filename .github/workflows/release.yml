@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   BIN_NAME:      vigil
@@ -141,6 +141,9 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    # Only this job writes to the repository; the others get read access.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
