@@ -33,8 +33,20 @@ Keep your system awake. Works on Linux, macOS, and Windows.
   mv vigil-aarch64-apple-darwin vigil
   chmod +x vigil
   rm SHA256SUMS
+  # macOS does not put ~/.local/bin on PATH by default.
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *)
+      grep -qs '\.local/bin' ~/.zprofile ||
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
+      echo "Added ~/.local/bin to PATH in ~/.zprofile; open a new terminal to use vigil."
+      ;;
+  esac
 )
 ```
+
+> **Downloaded with a browser instead?** macOS quarantines it; clear that with
+> `xattr -d com.apple.quarantine vigil` before running it.
 
 ### Windows (PowerShell)
 
@@ -65,12 +77,24 @@ Windows (x64), PowerShell 5.1+.
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     }
 
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    if (-not $userPath) { $userPath = '' }
-    $parts = @($userPath -split ';' | Where-Object { $_ })
-    $added = $parts -notcontains $dest
+    # Edit the raw registry value so entries like %JAVA_HOME%\bin stay unexpanded.
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+    try {
+        $userPath = [string]$key.GetValue('Path', '',
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $parts = @($userPath -split ';' | Where-Object { $_ })
+        $added = $parts -notcontains $dest
+        if ($added) {
+            $key.SetValue('Path', (($parts + $dest) -join ';'),
+                [Microsoft.Win32.RegistryValueKind]::ExpandString)
+        }
+    } finally {
+        $key.Close()
+    }
     if ($added) {
-        [Environment]::SetEnvironmentVariable('Path', (($parts + $dest) -join ';'), 'User')
+        # Setting and clearing a variable broadcasts the change to new terminals.
+        [Environment]::SetEnvironmentVariable('VIGIL_INSTALL', '1', 'User')
+        [Environment]::SetEnvironmentVariable('VIGIL_INSTALL', $null, 'User')
         $env:Path = "$env:Path;$dest"
     }
     Write-Host "Installed $dest\vigil.exe"
